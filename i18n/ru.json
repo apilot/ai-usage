@@ -1,0 +1,57 @@
+{
+  "desktop_widget": {
+    "title": "z.ai",
+    "remaining": "осталось {percent}%",
+    "reset_in": "сброс через {duration}",
+    "reset_at": "в {time}",
+    "no_key": "не задан API-ключ",
+    "no_key_hint": "клик → настройки",
+    "error": "ошибка запроса",
+    "loading": "…"
+  },
+  "panel": {
+    "header": "Z.AI Coding Plan",
+    "plan": "план: {plan}",
+    "section_title": "ИСПОЛЬЗОВАНИЕ",
+    "session_label": "Сессия (5ч)",
+    "weekly_label": "Недельный лимит (MCP-tools)",
+    "tools_label": "Разбивка MCP-инструментов",
+    "remaining": "осталось {percent}%",
+    "resets": "сброс {time} · через {duration}",
+    "refresh": "Обновить",
+    "updated": "обновлено {duration} назад",
+    "never": "ещё нет данных",
+    "cached": " · кэш",
+    "no_data": "Данных пока нет.",
+    "no_key": "API-ключ не настроен. Откройте настройки плагина и добавьте его."
+  },
+  "settings": {
+    "api_key": {
+      "label": "API-ключ",
+      "description": "Ключ API Z.AI. Если пусто — берётся Z_AI_API_KEY из окружения."
+    },
+    "refresh": {
+      "label": "Интервал обновления (минуты)",
+      "description": "Как часто опрашивать API использования (1–60)."
+    },
+    "show_weekly": {
+      "label": "Показывать недельный лимит",
+      "description": "Включить недельную квоту MCP-инструментов в панель."
+    },
+    "background": {
+      "label": "Фон виджета",
+      "description": "Рисовать фон карточки виджета на рабочем столе."
+    },
+    "saved": "Настройки сохранены"
+  },
+  "bar_widget": {
+    "tooltip": "z.ai · осталось {percent}% · сброс через {duration}"
+  },
+  "main": {
+    "fetch_error": "z.ai usage: ошибка запроса: {error}"
+  },
+  "units": {
+    "h": "ч",
+    "m": "мин"
+  }
+}

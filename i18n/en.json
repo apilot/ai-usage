@@ -1,0 +1,57 @@
+{
+  "desktop_widget": {
+    "title": "z.ai",
+    "remaining": "{percent}% left",
+    "reset_in": "resets in {duration}",
+    "reset_at": "at {time}",
+    "no_key": "API key not set",
+    "no_key_hint": "click → settings",
+    "error": "fetch failed",
+    "loading": "…"
+  },
+  "panel": {
+    "header": "Z.AI Coding Plan",
+    "plan": "plan: {plan}",
+    "section_title": "USAGE",
+    "session_label": "Session (5h)",
+    "weekly_label": "Weekly (MCP tools)",
+    "tools_label": "MCP tools breakdown",
+    "remaining": "{percent}% left",
+    "resets": "resets {time} · in {duration}",
+    "refresh": "Refresh",
+    "updated": "updated {duration} ago",
+    "never": "not fetched yet",
+    "cached": " · cached",
+    "no_data": "No data yet.",
+    "no_key": "API key is not configured. Open the plugin settings to add it."
+  },
+  "settings": {
+    "api_key": {
+      "label": "API key",
+      "description": "Z.AI API key. Leave empty to read Z_AI_API_KEY from the environment."
+    },
+    "refresh": {
+      "label": "Refresh interval (minutes)",
+      "description": "How often the usage API is polled (1–60)."
+    },
+    "show_weekly": {
+      "label": "Show weekly limit",
+      "description": "Include the weekly MCP-tools quota in the panel."
+    },
+    "background": {
+      "label": "Widget background",
+      "description": "Draw the desktop widget card background."
+    },
+    "saved": "Settings saved"
+  },
+  "bar_widget": {
+    "tooltip": "z.ai · {percent}% left · resets in {duration}"
+  },
+  "main": {
+    "fetch_error": "z.ai usage fetch failed: {error}"
+  },
+  "units": {
+    "h": "h",
+    "m": "m"
+  }
+}
