@@ -1,10 +1,6 @@
-// Panel.qml — full report panel: header (plan + refresh), status surface
-// when something is wrong, session/weekly usage rows, MCP-tools breakdown
-// and a "updated N ago" footer.
-//
-// Structure ported from ai-usagebar (MIT) kde-plasmoid FullRepresentation.qml;
-// themed with qs.Commons tokens, content laid out like the reference todo
-// plugin's Panel entry point.
+// Panel.qml v2 — provider tabs (ported from ai-usagebar FullRepresentation's
+// vendor tab strip, failing providers stay visible with a ⚠), full metrics of
+// the selected provider, MCP/breakdown blocks, updated-N-ago footer.
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
@@ -23,13 +19,29 @@ Item {
   readonly property bool allowAttach: true
   anchors.fill: parent
 
+  property string selectedId: ""
+
   readonly property var mainInstance: pluginApi ? pluginApi.mainInstance : null
-  readonly property var entry: mainInstance ? mainInstance.entry : null
-  readonly property string lastError: mainInstance ? mainInstance.lastError : ""
-  readonly property bool fetching: mainInstance ? mainInstance.fetching : false
-  readonly property bool hasKey: mainInstance ? mainInstance.hasKey : false
+  readonly property var providers: mainInstance ? mainInstance.providers : []
+  readonly property var entries: mainInstance ? mainInstance.entries : ({})
+  readonly property var errors: mainInstance ? mainInstance.errors : ({})
+  readonly property var fetching: mainInstance ? mainInstance.fetching : ({})
   readonly property real now: mainInstance ? mainInstance.now : 0
-  readonly property bool showWeekly: mainInstance ? mainInstance.showWeekly : true
+
+  readonly property string currentId: {
+    if (selectedId !== "" && providers.some(function (p) { return p.id === selectedId; }))
+      return selectedId;
+    return mainInstance ? mainInstance.activeProviderId : "";
+  }
+  readonly property var currentProvider: {
+    for (var i = 0; i < providers.length; i++) {
+      if (providers[i].id === currentId)
+        return providers[i];
+    }
+    return null;
+  }
+  readonly property var currentEntry: entries[currentId] !== undefined ? entries[currentId] : null
+  readonly property string currentError: errors[currentId] !== undefined ? errors[currentId] : ""
 
   readonly property var trFn: pluginApi ? function (key) {
     return pluginApi.tr(key);
@@ -37,28 +49,35 @@ Item {
   readonly property string hUnit: trFn ? trFn("units.h") : "h"
   readonly property string mUnit: trFn ? trFn("units.m") : "m"
 
-  readonly property var session: entry ? Logic.sectionByKey(entry, "session") : null
-  readonly property var weekly: entry ? Logic.sectionByKey(entry, "weekly") : null
-  readonly property var tools: entry ? Logic.sectionByKey(entry, "tools") : null
+  readonly property var validInfo: {
+    if (!currentProvider || !currentProvider.validUntil)
+      return null;
+    var days = Logic.daysLeft(currentProvider.validUntil, now);
+    return days === null ? null : {
+      date: Qt.formatDateTime(new Date(Logic.parseValidUntilDate(currentProvider.validUntil)), "dd.MM"),
+      days: days,
+      soon: Logic.isExpiringSoon(days)
+    };
+  }
 
-  readonly property string statusMessage: {
+  function metricLabel(key) {
     if (!trFn)
       return "";
-    if (!hasKey)
-      return trFn("panel.no_key");
-    if (!entry && fetching)
-      return trFn("panel.never");
-    if (!entry && lastError !== "")
-      return lastError;
-    return "";
+    if (key === "session")
+      return trFn("panel.session_label");
+    if (key === "weekly")
+      return trFn("panel.weekly_label");
+    if (key === "balance")
+      return trFn("panel.balance_label");
+    return key;
   }
 
   function updatedText() {
-    if (!trFn || !entry)
+    if (!trFn || !currentEntry)
       return "";
-    var ago = Logic.formatDuration(Date.now() - entry.fetchedAt, hUnit, mUnit);
+    var ago = Logic.formatDuration(Date.now() - currentEntry.fetchedAt, hUnit, mUnit);
     var text = trFn("panel.updated").replace("{duration}", ago);
-    if (lastError !== "")
+    if (currentError !== "")
       text += trFn("panel.cached");
     return text;
   }
@@ -75,53 +94,100 @@ Item {
       anchors.margins: Style.marginM
       spacing: Style.marginS
 
-      // --- header ----------------------------------------------------------
+      // --- header: title + refresh -----------------------------------------
       RowLayout {
         Layout.fillWidth: true
         spacing: Style.marginS
 
         NIcon {
-          icon: "bolt"
+          icon: "gauge"
           color: Color.mPrimary
         }
 
-        ColumnLayout {
+        NText {
           Layout.fillWidth: true
-          spacing: 0
-
-          NText {
-            Layout.fillWidth: true
-            text: root.trFn ? root.trFn("panel.header") : ""
-            color: Color.mOnSurface
-            pointSize: Style.fontSizeXL
-            font.bold: true
-            elide: Text.ElideRight
-          }
-
-          NText {
-            Layout.fillWidth: true
-            visible: root.entry && root.entry.plan !== ""
-            text: root.entry && root.entry.plan ? (root.trFn ? root.trFn("panel.plan").replace("{plan}", root.entry.plan) : root.entry.plan) : ""
-            color: Color.mOnSurfaceVariant
-            pointSize: Style.fontSizeS
-            elide: Text.ElideRight
-          }
+          text: root.trFn ? root.trFn("panel.header") : ""
+          color: Color.mOnSurface
+          pointSize: Style.fontSizeXL
+          font.bold: true
+          elide: Text.ElideRight
         }
 
         NIconButton {
           icon: "refresh"
-          enabled: !root.fetching && root.hasKey
+          enabled: !root.fetching[root.currentId] && root.currentProvider !== null
           onClicked: {
-            if (root.mainInstance)
-              root.mainInstance.fetchNow();
+            if (root.mainInstance && root.currentProvider)
+              root.mainInstance.fetchProvider(root.currentProvider);
           }
         }
       }
 
-      // --- status surface ----------------------------------------------------
+      // --- provider tabs (failing stay visible, ported from vendor-tabs) ----
+      RowLayout {
+        Layout.fillWidth: true
+        visible: root.providers.length > 1
+        spacing: Style.marginXS
+
+        Repeater {
+          model: root.providers
+
+          delegate: Rectangle {
+            id: tab
+            required property var modelData
+            readonly property bool active: modelData.id === root.currentId
+            readonly property bool failing: (root.errors[modelData.id] !== undefined && root.errors[modelData.id] !== "") || (root.entries[modelData.id] === undefined && modelData.enabled)
+            readonly property var m: root.mainInstance
+
+            Layout.fillWidth: true
+            Layout.preferredHeight: Style.fontSizeL + Style.marginS * 2
+            radius: Style.radiusS
+            color: active ? Qt.rgba(Color.mPrimary.r, Color.mPrimary.g, Color.mPrimary.b, 0.18) : Color.mSurfaceVariant
+            border.width: active ? 1 : 0
+            border.color: Color.mPrimary
+            opacity: modelData.enabled ? 1 : 0.4
+
+            MouseArea {
+              anchors.fill: parent
+              acceptedButtons: Qt.LeftButton
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.selectedId = tab.modelData.id
+            }
+
+            RowLayout {
+              anchors.centerIn: parent
+              spacing: Style.marginXS
+
+              ProviderChip {
+                monogram: tab.m ? tab.m.chipFor(tab.modelData).monogram : "?"
+                chipColor: tab.m ? tab.m.chipFor(tab.modelData).color : Color.mOnSurfaceVariant
+                size: Style.fontSizeM
+              }
+
+              NText {
+                text: tab.m ? tab.m.displayLabel(tab.modelData) : ""
+                color: tab.active ? Color.mOnSurface : Color.mOnSurfaceVariant
+                pointSize: Style.fontSizeS
+                font.bold: tab.active
+                elide: Text.ElideRight
+              }
+
+              NText {
+                visible: tab.failing
+                text: "⚠"
+                color: Color.mError
+                pointSize: Style.fontSizeS
+              }
+            }
+          }
+        }
+      }
+
+      // --- status surface ------------------------------------------------------
       Rectangle {
         Layout.fillWidth: true
-        visible: root.statusMessage !== ""
+        visible: root.providers.length === 0 || root.currentError !== "" || (root.currentEntry === null && root.fetching[root.currentId])
         implicitHeight: statusText.implicitHeight + Style.marginM * 2
         radius: Style.radiusS
         color: Qt.rgba(Color.mError.r, Color.mError.g, Color.mError.b, 0.09)
@@ -132,84 +198,99 @@ Item {
           id: statusText
           anchors.fill: parent
           anchors.margins: Style.marginS
-          text: root.statusMessage
+          text: {
+            if (!root.trFn)
+              return "";
+            if (root.providers.length === 0)
+              return root.trFn("panel.no_providers");
+            if (root.currentProvider && (!root.currentProvider.apiKey || root.currentProvider.apiKey === ""))
+              return root.trFn("panel.no_key");
+            if (root.currentError !== "")
+              return root.currentError;
+            if (root.currentEntry === null)
+              return root.trFn("panel.never");
+            return "";
+          }
           color: Color.mOnSurface
           pointSize: Style.fontSizeS
           wrapMode: Text.WordWrap
         }
       }
 
-      // --- usage rows ---------------------------------------------------------
+      // --- valid until -----------------------------------------------------------
+      NText {
+        Layout.fillWidth: true
+        visible: root.validInfo !== null
+        text: root.validInfo && root.trFn ? root.trFn("desktop_widget.until").replace("{date}", root.validInfo.date).replace("{days}", root.validInfo.days) : ""
+        color: root.validInfo && root.validInfo.soon ? "#FFB020" : Color.mOnSurfaceVariant
+        pointSize: Style.fontSizeS
+      }
+
+      // --- metrics of the selected provider -----------------------------------------
       NDivider {
         Layout.fillWidth: true
-        visible: root.session !== null || root.weekly !== null
+        visible: root.currentEntry !== null
       }
 
       NText {
         Layout.fillWidth: true
-        visible: root.session !== null || root.weekly !== null
+        visible: root.currentEntry !== null
         text: root.trFn ? root.trFn("panel.section_title") : ""
         color: Color.mOnSurfaceVariant
         pointSize: Style.fontSizeXS
       }
 
-      UsageRow {
-        Layout.fillWidth: true
-        visible: root.session !== null
-        section: root.session
-        label: root.trFn ? root.trFn("panel.session_label") : ""
-        detail: {
-          if (!root.trFn || !root.session || root.session.percent === null || root.session.percent === undefined)
-            return "";
-          return root.trFn("panel.remaining").replace("{percent}", String(100 - root.session.percent));
-        }
-        now: root.now
-        tr: root.trFn
-        hUnit: root.hUnit
-        mUnit: root.mUnit
-      }
+      Repeater {
+        model: root.currentEntry ? root.currentEntry.sections : []
 
-      UsageRow {
-        Layout.fillWidth: true
-        visible: root.showWeekly && root.weekly !== null
-        section: root.weekly
-        label: root.trFn ? root.trFn("panel.weekly_label") : ""
-        detail: {
-          if (!root.trFn || !root.weekly || root.weekly.detail === "")
-            return "";
-          return root.weekly.value + " · −" + root.weekly.detail;
-        }
-        now: root.now
-        tr: root.trFn
-        hUnit: root.hUnit
-        mUnit: root.mUnit
-      }
+        delegate: ColumnLayout {
+          id: secRow
+          required property var modelData
 
-      // --- MCP tools breakdown --------------------------------------------------
-      ColumnLayout {
-        Layout.fillWidth: true
-        visible: root.showWeekly && root.tools !== null
-        spacing: 0
-
-        NText {
           Layout.fillWidth: true
-          Layout.topMargin: Style.marginS
-          text: root.trFn ? root.trFn("panel.tools_label") : ""
-          color: Color.mOnSurfaceVariant
-          pointSize: Style.fontSizeXS
-        }
 
-        Repeater {
-          model: root.tools ? root.tools.body : []
-
-          NText {
-            required property string modelData
+          Loader {
             Layout.fillWidth: true
-            Layout.topMargin: Style.marginXXS
-            text: modelData
-            color: Color.mOnSurfaceVariant
-            pointSize: Style.fontSizeS
-            opacity: 0.8
+            active: secRow.modelData.type === 'metric'
+            sourceComponent: UsageRow {
+              Layout.fillWidth: true
+              section: secRow.modelData
+              label: root.metricLabel(secRow.modelData.key)
+              detail: secRow.modelData.key === "session" && root.trFn && secRow.modelData.percent !== null && secRow.modelData.percent !== undefined ? root.trFn("panel.remaining").replace("{percent}", String(100 - secRow.modelData.percent)) : secRow.modelData.detail
+              now: root.now
+              tr: root.trFn
+              hUnit: root.hUnit
+              mUnit: root.mUnit
+            }
+          }
+
+          ColumnLayout {
+            Layout.fillWidth: true
+            visible: secRow.modelData.type === 'block'
+            spacing: 0
+
+            NText {
+              Layout.fillWidth: true
+              Layout.topMargin: Style.marginS
+              visible: text !== ""
+              text: secRow.modelData.key === 'tools' ? (root.trFn ? root.trFn("panel.tools_label") : "") : ""
+              color: Color.mOnSurfaceVariant
+              pointSize: Style.fontSizeXS
+            }
+
+            Repeater {
+              model: secRow.modelData.type === 'block' ? secRow.modelData.body : []
+
+              NText {
+                required property string modelData
+                Layout.fillWidth: true
+                Layout.topMargin: Style.marginXXS
+                text: modelData
+                color: Color.mOnSurfaceVariant
+                pointSize: Style.fontSizeS
+                opacity: 0.8
+              }
+            }
           }
         }
       }

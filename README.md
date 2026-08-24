@@ -1,29 +1,35 @@
 # AI Usage — Noctalia Shell plugin
 
-Desktop / bar / control-center widget for [Noctalia Shell v4](https://docs.noctalia.dev) that monitors your **GLM Coding Plan** usage on z.ai:
+Multi-provider **AI plan usage monitor** for [Noctalia Shell v4](https://docs.noctalia.dev):
 
-- ⚡ **Session (5h)** — how much of the 5-hour rolling token window is left, with a live reset countdown
-- 📅 **Weekly MCP-tools quota** — search-prime / web-reader / zread breakdown
-- 🎨 Severity-colored usage bars, compact bar capsule, detail panel, settings UI (en/ru)
+- ⚡ **z.ai GLM Coding Plan** — 5-hour session window, weekly MCP-tools quota, live reset countdown
+- 💰 **DeepSeek** — balance (granted/topped-up breakdown, USD/CNY)
+- 💰 **OpenRouter** — credits balance, consumption %, key meta (label, free tier, rate limit)
+- ⚡ **Kimi** — session window + weekly quota
+
+One card on the desktop, a capsule in the bar, a tile in the Control Center, a detailed panel with provider tabs — pick what you use. Several providers can be added side by side; the active one headlines the widget, others are one click away.
 
 ```
 ┌────────────────────────────┐
-│ ⚡ AI · pro        46%    │
-│ ▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░  │
-│ сброс 21:07 · через 1ч23м │
+│ (Z) z.ai · pro      46%   │   ← active provider: chip + plan + remaining
+│ ▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░  │   ← severity-colored usage bar
+│ сброс 21:07 · через 1ч23м │   ← live reset countdown (local TZ)
+│ до 15.09 · 22 дн          │   ← optional plan validity (manual)
+│ (K) Kimi            80%   │   ← other providers: compact rows
 └────────────────────────────┘
 ```
 
 ## Attribution
 
 This plugin is **based on [akitaonrails/ai-usagebar](https://github.com/akitaonrails/ai-usagebar)** (MIT).
-The `UsageBar.qml` / `UsageRow.qml` components and the logic layer are ported from its
-KDE-plasmoid frontend to Noctalia's `qs.Commons` design system, with the z.ai
-fetch implemented natively in QML (`XMLHttpRequest`) instead of shelling out to
-the Rust binary.
+`UsageBar.qml`, `UsageRow.qml` and the parsing/logic layer are ported from its
+KDE-plasmoid frontend to Noctalia's `qs.Commons` design system; provider
+endpoints are fetched natively in QML (`XMLHttpRequest`) instead of shelling
+out to the Rust binary.
 
-The z.ai endpoint `api.z.ai/api/monitor/usage/quota/limit` is undocumented
-(reverse-engineered); parsing is defensive and degrades gracefully.
+The z.ai and Kimi endpoints are undocumented (reverse-engineered) and treated
+as fragile: parsing is defensive and degrades gracefully instead of breaking
+the widget.
 
 ## Install
 
@@ -31,101 +37,70 @@ The z.ai endpoint `api.z.ai/api/monitor/usage/quota/limit` is undocumented
 git clone https://github.com/aboyarinov/noctalia-ai-usage ~/.config/noctalia/plugins/ai-usage
 ```
 
-Add to `~/.config/noctalia/plugins.json` (inside `"states"`):
-
-```json
-"ai-usage": { "enabled": true, "sourceUrl": "https://github.com/aboyarinov/noctalia-ai-usage" }
-```
-
-Restart the shell:
-
-```bash
-pkill -x qs && sleep 1 && setsid qs -c noctalia-shell --daemonize
-```
+Enable the plugin (Noctalia Settings → Plugins, or add `"ai-usage": {"enabled": true, "sourceUrl": "…"}` to `~/.config/noctalia/plugins.json` `states`) and restart the shell (`qs -c noctalia-shell`).
 
 ## Configure
 
 1. Open plugin **Settings**
-2. Paste your **API key** (from z.ai → API keys). If left empty, the widget
-   reads `Z_AI_API_KEY` from the environment (note: desktop sessions don't see
-   shell rc files — set it via `~/.config/environment.d/` or just use the setting).
-3. Tweak the refresh interval (1–60 min, default 5) and visibility options.
+2. Pick a **provider type**, paste the **API key**, press **Add** — the widget
+   fetches immediately (a wrong key shows the error inline, nothing breaks)
+3. Optionally set a **display name**, a **plan override** (`pro`, `lite`…) and
+   **valid until** (`YYYY-MM-DD`) — the card then shows «until 15.09 · 22 d»
+   and highlights the date when ≤ 7 days remain
+4. Repeat for every provider you use; click a row to make it the active one
 
-## Where to add the widget (all native, via Noctalia Settings GUI)
+| Setting | Meaning |
+|---|---|
+| Providers | List of `{type, apiKey, label, planLabel, validUntil, enabled}` |
+| Refresh interval | 1–60 min (default 5) |
+| Widget background | Card background on the desktop |
+
+## Where to add the widget
 
 | Surface | How |
 |---|---|
-| **Bar** | Settings → Bar → widgets: add **AI Usage** (compact `⚡ 46%` capsule) |
-| **Control Center** | Settings → Control Center → Shortcuts → **+**: add **AI Usage** tile (badge “plugin”). Click = panel, right-click = settings |
-| **Desktop** | Desktop edit mode → add **AI Usage** card, drag anywhere (e.g. under the weather widget) |
+| Desktop | Edit mode → drag **AI Usage** anywhere (e.g. under the weather card) |
+| Bar | Bar settings → widgets → **AI Usage** |
+| Control Center | CC settings → **Shortcuts** → add **AI Usage** (plugin badge) |
+| Clock dropdown | Optional manual patch — see below |
 
-## Optional: inside the Clock dropdown (below weather)
+### Optional: inside the Clock dropdown
 
-The clock dropdown (calendar + weather) has **no plugin API in Noctalia 0.0.12** —
-its card list is hardcoded. Adding the widget there requires a small patch of
-your **user copy** of the shell (no root needed, survives nothing — re-apply
-after shell updates):
-
-**1.** Make a user copy of the shell (Quickshell prefers `~/.config` over `/etc/xdg`):
+The clock panel only renders its hardcoded cards. To place the widget under
+the weather card, patch a user copy of the shell:
 
 ```bash
 cp -r /etc/xdg/quickshell/noctalia-shell ~/.config/quickshell/noctalia-shell
 ```
 
-⚠️ After noctalia-qs package updates, re-sync your copy or the shell won't get fixes.
-
-**2.** Patch `~/.config/quickshell/noctalia-shell/Modules/Panels/Clock/ClockPanel.qml`:
-
-- add import: `import qs.Modules.Panels.ControlCenter`
-- in the `Repeater`'s `switch`, replace `default: return null;` with:
+In `~/.config/quickshell/noctalia-shell/Modules/Panels/Clock/ClockPanel.qml`
+add `import qs.Modules.Panels.ControlCenter` and, in the cards `switch`
+`default:` branch:
 
 ```qml
-default:
-  return ControlCenterWidgetRegistry.isPluginWidget(modelData.id) ? pluginCard : null;
+return ControlCenterWidgetRegistry.isPluginWidget(modelData.id) ? pluginCard : null;
 ```
 
-- inside the same `Loader` delegate, add:
+with an inline `Component` `pluginCard` containing
+`ControlCenterWidgetLoader { widgetId: modelData.id; widgetScreen: root.screen; widgetProps: ({}) }`,
+then append `{"enabled": true, "id": "plugin:ai-usage"}` to `calendar.cards`
+in `~/.config/noctalia/settings.json`.
 
-```qml
-Component {
-  id: pluginCard
-  ControlCenterWidgetLoader {
-    widgetId: modelData.id
-    widgetScreen: root.screen
-    widgetProps: ({})
-  }
-}
-```
+## Provider endpoints
 
-**3.** Add the card below weather in `~/.config/noctalia/settings.json`:
-
-```json
-"calendar": {
-  "cards": [
-    { "enabled": true, "id": "calendar-header-card" },
-    { "enabled": true, "id": "calendar-month-card" },
-    { "enabled": true, "id": "weather-card" },
-    { "enabled": true, "id": "plugin:ai-usage" }
-  ]
-}
-```
-
-⚠️ Don't reorder clock-panel cards in the Settings GUI afterwards — that tab
-rewrites the list and drops unknown IDs.
-
-**4.** Restart the shell (command above). Click the clock → the AI card sits
-right under the weather.
-
-## Entry points
-
-| Point | File | What it shows |
+| Provider | Endpoint | Notes |
 |---|---|---|
-| Desktop widget | `DesktopWidget.qml` | Draggable card: session % bar + reset countdown |
-| Bar widget | `BarWidget.qml` | Compact capsule `⚡ 46%` |
-| Control Center | `ControlCenterWidget.qml` | Tile with live tooltip |
-| Panel | `Panel.qml` | Full report: session + weekly + MCP breakdown + refresh |
-| Settings | `Settings.qml` | API key, interval, toggles |
-| Main | `Main.qml` | Shared fetch service (single poller for all views) |
+| z.ai | `api.z.ai/api/monitor/usage/quota/limit` | undocumented, `TOKENS_LIMIT` = 5h window |
+| DeepSeek | `api.deepseek.com/user/balance` | documented API |
+| OpenRouter | `openrouter.ai/api/v1/credits` + `/api/v1/key` | documented API |
+| Kimi | `api.kimi.com/coding/v1/usages` | undocumented, tolerant parsing |
+
+## Development
+
+```bash
+node tests/logic.test.mjs          # 22 unit tests for the data layer
+timeout 25 qs -p <bench-dir>       # QML component smoke test
+```
 
 ## License
 

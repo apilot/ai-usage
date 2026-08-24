@@ -4,8 +4,10 @@
     "remaining": "осталось {percent}%",
     "reset_in": "сброс через {duration}",
     "reset_at": "в {time}",
+    "until": "до {date} · {days} дн",
     "no_key": "не задан API-ключ",
-    "no_key_hint": "клик → настройки",
+    "no_providers": "Нет провайдеров",
+    "add_provider_hint": "клик → настройки",
     "error": "ошибка запроса",
     "loading": "…"
   },
@@ -15,6 +17,7 @@
     "section_title": "ИСПОЛЬЗОВАНИЕ",
     "session_label": "Сессия (5ч)",
     "weekly_label": "Недельный лимит (MCP-tools)",
+    "balance_label": "Баланс",
     "tools_label": "Разбивка MCP-инструментов",
     "remaining": "осталось {percent}%",
     "resets": "сброс {time} · через {duration}",
@@ -23,20 +26,29 @@
     "never": "ещё нет данных",
     "cached": " · кэш",
     "no_data": "Данных пока нет.",
-    "no_key": "API-ключ не настроен. Откройте настройки плагина и добавьте его."
+    "no_key": "Для этого провайдера не настроен API-ключ.",
+    "no_providers": "Провайдеры не настроены. Добавьте их в настройках плагина."
   },
   "settings": {
+    "title": "AI Usage",
+    "providers_label": "ПРОВАЙДЕРЫ",
+    "add_provider": {
+      "label": "ДОБАВИТЬ ПРОВАЙДЕРА",
+      "action": "Добавить"
+    },
+    "provider": {
+      "type": "Тип провайдера",
+      "label_field": "Отображаемое имя (необязательно)",
+      "plan_field": "Тарифный план (необязательно)",
+      "valid_until": "Действует до (ГГГГ-ММ-ДД, необязательно)"
+    },
     "api_key": {
       "label": "API-ключ",
-      "description": "Ключ API Z.AI. Если пусто — берётся Z_AI_API_KEY из окружения."
+      "description": "Ключ API провайдера."
     },
     "refresh": {
       "label": "Интервал обновления (минуты)",
-      "description": "Как часто опрашивать API использования (1–60)."
-    },
-    "show_weekly": {
-      "label": "Показывать недельный лимит",
-      "description": "Включить недельную квоту MCP-инструментов в панель."
+      "description": "Как часто опрашивать API (1–60)."
     },
     "background": {
       "label": "Фон виджета",
@@ -45,7 +57,7 @@
     "saved": "Настройки сохранены"
   },
   "bar_widget": {
-    "tooltip": "AI · осталось {percent}% · сброс через {duration}"
+    "tooltip": "осталось {percent}% · сброс через {duration}"
   },
   "main": {
     "fetch_error": "AI usage: ошибка запроса: {error}"

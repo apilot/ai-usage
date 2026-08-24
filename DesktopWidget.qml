@@ -1,8 +1,8 @@
-// DesktopWidget.qml — draggable desktop card: session usage bar with a live
-// reset countdown, optional weekly quota row.
-//
-// Sizing follows the reference plugin: every dimension goes through
-// widgetScale with Math.round.
+// DesktopWidget.qml v2 — multi-provider card.
+// Layout: the active provider expanded on top (chip + name + plan + big
+// remaining value + severity bar + reset countdown + valid-until), other
+// enabled providers as compact rows beneath (click = make active).
+// Single provider renders without the list.
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
@@ -19,12 +19,17 @@ DraggableDesktopWidget {
   showBackground: pluginApi && pluginApi.pluginSettings && pluginApi.pluginSettings.showBackground !== undefined ? pluginApi.pluginSettings.showBackground : (pluginApi && pluginApi.manifest ? pluginApi.manifest.metadata.defaultSettings.showBackground : true)
 
   readonly property var mainInstance: pluginApi ? pluginApi.mainInstance : null
-  readonly property var entry: mainInstance ? mainInstance.entry : null
-  readonly property string lastError: mainInstance ? mainInstance.lastError : ""
-  readonly property bool fetching: mainInstance ? mainInstance.fetching : false
-  readonly property bool hasKey: mainInstance ? mainInstance.hasKey : false
+  readonly property var providers: mainInstance ? mainInstance.providers : []
+  readonly property string activeId: mainInstance ? mainInstance.activeProviderId : ""
+  readonly property var entries: mainInstance ? mainInstance.entries : ({})
+  readonly property var errors: mainInstance ? mainInstance.errors : ({})
+  readonly property var fetching: mainInstance ? mainInstance.fetching : ({})
   readonly property real now: mainInstance ? mainInstance.now : 0
-  readonly property bool showWeekly: mainInstance ? mainInstance.showWeekly : true
+
+  readonly property var activeProvider: mainInstance ? mainInstance.activeProvider : null
+  readonly property var activeEntry: mainInstance ? mainInstance.activeEntry : null
+  readonly property string activeError: mainInstance ? mainInstance.activeError : ""
+  readonly property bool hasProviders: providers.length > 0
 
   readonly property var trFn: pluginApi ? function (key) {
     return pluginApi.tr(key);
@@ -32,18 +37,23 @@ DraggableDesktopWidget {
   readonly property string hUnit: trFn ? trFn("units.h") : "h"
   readonly property string mUnit: trFn ? trFn("units.m") : "m"
 
-  readonly property var session: entry ? Logic.sectionByKey(entry, "session") : null
-  readonly property var weekly: entry ? Logic.sectionByKey(entry, "weekly") : null
-
-  // session.percent is USED percent; the card headlines what is LEFT.
-  readonly property int usedPct: session && session.percent !== null && session.percent !== undefined ? session.percent : -1
-  readonly property int leftPct: usedPct >= 0 ? 100 - usedPct : -1
-  readonly property string plan: entry && entry.plan ? entry.plan : ""
+  readonly property var headline: mainInstance && activeEntry ? mainInstance.headlineSection(activeEntry) : null
+  readonly property int leftPct: mainInstance && activeEntry ? mainInstance.leftPercent(activeEntry) : -1
+  readonly property bool isPercentMode: leftPct >= 0
+  readonly property string planLine: {
+    if (!activeProvider)
+      return "";
+    if (activeProvider.planLabel && activeProvider.planLabel !== "")
+      return activeProvider.planLabel;
+    if (activeEntry && activeEntry.plan && activeEntry.plan !== "")
+      return activeEntry.plan;
+    return "";
+  }
 
   readonly property color accentColor: {
-    if (!session)
+    if (!headline)
       return Color.mOnSurfaceVariant;
-    switch (session.severity) {
+    switch (headline.severity) {
     case "critical":
       return Color.mError;
     case "high":
@@ -55,30 +65,41 @@ DraggableDesktopWidget {
     }
   }
 
+  readonly property var validInfo: {
+    if (!activeProvider || !activeProvider.validUntil)
+      return null;
+    var days = Logic.daysLeft(activeProvider.validUntil, now);
+    return days === null ? null : {
+      date: Qt.formatDateTime(new Date(Logic.parseValidUntilDate(activeProvider.validUntil)), "dd.MM"),
+      days: days,
+      soon: Logic.isExpiringSoon(days)
+    };
+  }
+
+  readonly property string valueLine: {
+    if (!trFn)
+      return "";
+    if (!hasProviders)
+      return "";
+    if (!activeEntry) {
+      if (activeError !== "")
+        return trFn("desktop_widget.error");
+      if (activeProvider && (!activeProvider.apiKey || activeProvider.apiKey === ""))
+        return trFn("desktop_widget.no_key");
+      return fetching[activeId] ? trFn("desktop_widget.loading") : trFn("desktop_widget.loading");
+    }
+    if (isPercentMode)
+      return leftPct + "%";
+    return headline ? headline.value : "";
+  }
+
   // Scaled dimensions
   readonly property int scaledMarginM: Math.round(Style.marginM * widgetScale)
   readonly property int scaledMarginS: Math.round(Style.marginS * widgetScale)
-  readonly property int scaledMarginL: Math.round(Style.marginL * widgetScale)
   readonly property int scaledFontSizeS: Math.round(Style.fontSizeS * widgetScale)
   readonly property int scaledFontSizeM: Math.round(Style.fontSizeM * widgetScale)
-  readonly property int scaledFontSizeL: Math.round(Style.fontSizeL * widgetScale)
   readonly property int scaledFontSizeXL: Math.round(Style.fontSizeXL * widgetScale)
-  readonly property int scaledRadiusM: Math.round(Style.radiusM * widgetScale)
   readonly property int scaledBarHeight: Math.max(4, Math.round(8 * widgetScale))
-
-  readonly property string resetLine: {
-    if (!trFn)
-      return "";
-    if (!hasKey)
-      return trFn("desktop_widget.no_key");
-    if (!session)
-      return fetching ? trFn("desktop_widget.loading") : (lastError !== "" ? trFn("desktop_widget.error") : trFn("desktop_widget.loading"));
-    if (!(session.resetAt > 0))
-      return "";
-    var time = Qt.formatDateTime(new Date(session.resetAt), "HH:mm");
-    var dur = Logic.formatDuration(Logic.remainingMs(session.resetAt, now), hUnit, mUnit);
-    return trFn("desktop_widget.reset_in").replace("{duration}", dur) + " · " + trFn("desktop_widget.reset_at").replace("{time}", time);
-  }
 
   implicitWidth: Math.round(260 * widgetScale)
   implicitHeight: contentCol.implicitHeight + scaledMarginM * 2
@@ -93,12 +114,10 @@ DraggableDesktopWidget {
     acceptedButtons: Qt.LeftButton
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
-    // Dragging is handled by DraggableDesktopWidget; only react to plain
-    // clicks so the click-to-panel does not fight the drag gesture.
     onClicked: function (mouse) {
       if (mouse.button !== Qt.LeftButton)
         return;
-      if (!root.hasKey && root.pluginApi) {
+      if (!root.hasProviders && root.pluginApi) {
         BarService.openPluginSettings(root.screen, root.pluginApi.manifest);
         return;
       }
@@ -113,14 +132,37 @@ DraggableDesktopWidget {
     anchors.margins: scaledMarginM
     spacing: scaledMarginS
 
-    // --- header: icon · title/plan … big remaining % -----------------------
+    // --- empty state -------------------------------------------------------
+    ColumnLayout {
+      Layout.fillWidth: true
+      visible: !root.hasProviders
+      spacing: 0
+
+      NText {
+        Layout.fillWidth: true
+        text: root.trFn ? root.trFn("desktop_widget.no_providers") : ""
+        color: Color.mOnSurfaceVariant
+        pointSize: root.scaledFontSizeM
+      }
+      NText {
+        Layout.fillWidth: true
+        text: root.trFn ? root.trFn("desktop_widget.add_provider_hint") : ""
+        color: Color.mOnSurfaceVariant
+        pointSize: root.scaledFontSizeS
+        opacity: 0.7
+      }
+    }
+
+    // --- active provider block ----------------------------------------------
     RowLayout {
       Layout.fillWidth: true
+      visible: root.hasProviders
       spacing: scaledMarginS
 
-      NIcon {
-        icon: "bolt"
-        color: root.accentColor
+      ProviderChip {
+        monogram: root.mainInstance && root.activeProvider ? root.mainInstance.chipFor(root.activeProvider).monogram : "?"
+        chipColor: root.mainInstance && root.activeProvider ? root.mainInstance.chipFor(root.activeProvider).color : Color.mOnSurfaceVariant
+        scale_: root.widgetScale
       }
 
       ColumnLayout {
@@ -129,7 +171,7 @@ DraggableDesktopWidget {
 
         NText {
           Layout.fillWidth: true
-          text: root.trFn ? root.trFn("desktop_widget.title") : "z.ai"
+          text: root.mainInstance && root.activeProvider ? root.mainInstance.displayLabel(root.activeProvider) : ""
           color: Color.mOnSurface
           pointSize: root.scaledFontSizeM
           elide: Text.ElideRight
@@ -137,8 +179,8 @@ DraggableDesktopWidget {
 
         NText {
           Layout.fillWidth: true
-          visible: root.plan !== ""
-          text: root.plan
+          visible: root.planLine !== ""
+          text: root.planLine
           color: Color.mOnSurfaceVariant
           pointSize: root.scaledFontSizeS
           elide: Text.ElideRight
@@ -146,63 +188,116 @@ DraggableDesktopWidget {
       }
 
       NText {
-        visible: root.leftPct >= 0
-        text: root.leftPct + "%"
-        color: root.accentColor
+        visible: root.valueLine !== ""
+        text: root.valueLine
+        color: root.hasProviders && root.activeEntry === null && root.activeError !== "" ? Color.mError : root.accentColor
         pointSize: root.scaledFontSizeXL
         font.bold: true
       }
     }
 
-    // --- session bar -------------------------------------------------------
+    // --- active severity bar --------------------------------------------------
     UsageBar {
       Layout.fillWidth: true
       Layout.preferredHeight: root.scaledBarHeight
-      visible: root.usedPct >= 0
-      pct: root.usedPct
-      severity: root.session ? root.session.severity : "low"
+      visible: root.isPercentMode
+      pct: root.headline ? root.headline.percent : 0
+      severity: root.headline ? root.headline.severity : "low"
     }
 
-    // --- reset line / state ------------------------------------------------
+    // --- reset / valid-until lines ---------------------------------------------
     NText {
       Layout.fillWidth: true
-      visible: text !== ""
-      text: root.resetLine
-      color: root.hasKey ? Color.mOnSurfaceVariant : Color.mError
-      pointSize: root.scaledFontSizeS
-      elide: Text.ElideRight
-    }
-
-    NText {
-      Layout.fillWidth: true
-      visible: !root.hasKey && root.trFn !== null
-      text: root.trFn ? root.trFn("desktop_widget.no_key_hint") : ""
+      visible: text !== "" && root.isPercentMode && root.headline && root.headline.resetAt > 0
+      text: {
+        if (!root.trFn || !root.headline || !(root.headline.resetAt > 0))
+          return "";
+        var time = Qt.formatDateTime(new Date(root.headline.resetAt), "HH:mm");
+        var dur = Logic.formatDuration(Logic.remainingMs(root.headline.resetAt, now), hUnit, mUnit);
+        return root.trFn("desktop_widget.reset_in").replace("{duration}", dur) + " · " + root.trFn("desktop_widget.reset_at").replace("{time}", time);
+      }
       color: Color.mOnSurfaceVariant
       pointSize: root.scaledFontSizeS
-      opacity: 0.7
       elide: Text.ElideRight
     }
 
-    // --- optional weekly row ------------------------------------------------
-    RowLayout {
+    NText {
       Layout.fillWidth: true
-      visible: root.showWeekly && root.weekly !== null
-      spacing: scaledMarginS
+      visible: root.validInfo !== null
+      text: root.validInfo && root.trFn ? root.trFn("desktop_widget.until").replace("{date}", root.validInfo.date).replace("{days}", root.validInfo.days) : ""
+      color: root.validInfo && root.validInfo.soon ? "#FFB020" : Color.mOnSurfaceVariant
+      pointSize: root.scaledFontSizeS
+      elide: Text.ElideRight
+    }
 
-      NText {
-        Layout.fillWidth: true
-        text: root.trFn ? root.trFn("panel.weekly_label") : ""
-        color: Color.mOnSurfaceVariant
-        pointSize: root.scaledFontSizeS
-        elide: Text.ElideRight
+    // --- other providers --------------------------------------------------------
+    Repeater {
+      model: {
+        var list = [];
+        for (var i = 0; i < root.providers.length; i++) {
+          var p = root.providers[i];
+          if (p.enabled && p.id !== root.activeId)
+            list.push(p);
+        }
+        return list;
       }
 
-      NText {
-        visible: root.weekly && root.weekly.value !== ""
-        text: root.weekly ? root.weekly.value : ""
-        color: Color.mOnSurface
-        pointSize: root.scaledFontSizeS
-        font.bold: true
+      delegate: RowLayout {
+        id: row
+        required property var modelData
+        Layout.fillWidth: true
+        spacing: root.scaledMarginS
+
+        readonly property var m: root.mainInstance
+        readonly property var entry: root.entries[row.modelData.id] !== undefined ? root.entries[row.modelData.id] : null
+
+        MouseArea {
+          Layout.fillWidth: true
+          Layout.preferredHeight: parent.implicitHeight
+          acceptedButtons: Qt.LeftButton
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: {
+            if (root.mainInstance)
+              root.mainInstance.setActive(row.modelData.id);
+          }
+
+          RowLayout {
+            anchors.fill: parent
+            spacing: root.scaledMarginS
+
+            ProviderChip {
+              monogram: row.m ? row.m.chipFor(row.modelData).monogram : "?"
+              chipColor: row.m ? row.m.chipFor(row.modelData).color : Color.mOnSurfaceVariant
+              size: Style.fontSizeL
+              scale_: root.widgetScale
+            }
+
+            NText {
+              Layout.fillWidth: true
+              text: row.m ? row.m.displayLabel(row.modelData) : ""
+              color: Color.mOnSurfaceVariant
+              pointSize: root.scaledFontSizeS
+              elide: Text.ElideRight
+            }
+
+            NText {
+              visible: row.entry !== null
+              text: {
+                if (!row.entry || !row.m)
+                  return "";
+                var lp = row.m.leftPercent(row.entry);
+                if (lp >= 0)
+                  return lp + "%";
+                var h = row.m.headlineSection(row.entry);
+                return h ? h.value : "";
+              }
+              color: Color.mOnSurface
+              pointSize: root.scaledFontSizeS
+              font.bold: true
+            }
+          }
+        }
       }
     }
   }

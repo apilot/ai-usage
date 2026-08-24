@@ -1,12 +1,12 @@
 {
   "id": "ai-usage",
   "name": "AI Usage",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "minNoctaliaVersion": "3.7.1",
   "author": "aboyarinov",
   "license": "MIT",
   "repository": "https://github.com/aboyarinov/noctalia-ai-usage",
-  "description": "AI plan usage monitor for Noctalia Shell: 5-hour session quota, weekly MCP-tools quota and reset countdown (z.ai GLM Coding Plan). UI ported from akitaonrails/ai-usagebar (KDE plasmoid).",
+  "description": "Multi-provider AI plan usage monitor for Noctalia Shell: z.ai, DeepSeek, OpenRouter and Kimi quotas, balances, reset countdowns and plan validity in one card. UI ported from akitaonrails/ai-usagebar (KDE plasmoid).",
   "tags": ["Bar", "Desktop", "Panel", "Control Center", "Monitoring"],
   "entryPoints": {
     "main": "Main.qml",
@@ -21,9 +21,9 @@
   },
   "metadata": {
     "defaultSettings": {
-      "apiKey": "",
+      "providers": [],
+      "activeProviderId": "",
       "refreshMinutes": 5,
-      "showWeekly": true,
       "showBackground": true
     }
   }
