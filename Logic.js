@@ -263,13 +263,20 @@ function parseZai(responses, nowMs) {
     var details = weekly.usageDetails;
     if (Array.isArray(details) && details.length > 0) {
       var body = [];
+      var items = [];
       for (var d = 0; d < details.length && d < 32; d++) {
         var row = details[d];
-        if (row)
-          body.push(safeText(row.modelCode, 60) + ' · ' + finiteInt(row.usage));
+        if (row) {
+          var name = safeText(row.modelCode, 60);
+          var usage = finiteInt(row.usage);
+          body.push(name + ' · ' + usage);
+          items.push({ name: name, usage: usage });
+        }
       }
       if (body.length > 0)
-        sections.push(blockSection('tools', body));
+        // items/limit: structured per-tool data for ratio gauges (v2.1 UI)
+        sections.push({ type: 'block', key: 'tools', body: body, items: items,
+                        limit: cap !== null && cap > 0 ? cap : 0 });
     }
   }
   return {

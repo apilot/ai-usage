@@ -115,6 +115,13 @@ test('zai: parses live quota fixture', () => {
   const t = Logic.sectionByKey(e, 'tools');
   equal(t.body.length, 3);
   ok(t.body[0].includes('search-prime'));
+  // v2.1: structured data for per-tool gauges (name/usage/limit)
+  equal(t.limit, 1000, 'tools.limit is the weekly cap');
+  ok(Array.isArray(t.items) && t.items.length === 3, 'tools.items array');
+  equal(t.items[0].name, 'search-prime');
+  equal(t.items[0].usage, 62);
+  equal(t.items[2].name, 'zread');
+  equal(t.items[2].usage, 25);
 });
 
 test('zai: error wrapper degrades to {ok:false}', () => {

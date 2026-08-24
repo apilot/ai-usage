@@ -1,6 +1,11 @@
-// Panel.qml v2 — provider tabs (ported from ai-usagebar FullRepresentation's
-// vendor tab strip, failing providers stay visible with a ⚠), full metrics of
-// the selected provider, MCP/breakdown blocks, updated-N-ago footer.
+// Panel.qml v2.1 — data-dense redesign.
+//
+// Visual hierarchy (per design review): provider identity in the header,
+// a HERO box for the headline metric (ring gauge for window vendors, big
+// money for balance vendors), every remaining metric and breakdown in its
+// own NBox card, per-tool ratio gauges, valid-until chip. Tabs stay compact.
+//
+// Structure heritage: vendor tab strip ported from ai-usagebar FullRepresentation.
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
@@ -49,6 +54,37 @@ Item {
   readonly property string hUnit: trFn ? trFn("units.h") : "h"
   readonly property string mUnit: trFn ? trFn("units.m") : "m"
 
+  // --- hero helpers ---------------------------------------------------------
+
+  readonly property var hero: mainInstance && currentEntry ? mainInstance.headlineSection(currentEntry) : null
+  readonly property bool heroPercent: hero !== null && hero.percent !== null && hero.percent !== undefined
+  readonly property int heroLeft: heroPercent ? 100 - hero.percent : -1
+  // money strings never contain '%' (zai/kimi values do) → no duplication with the ring
+  readonly property string heroMoney: hero && hero.value !== "" && String(hero.value).indexOf('%') === -1 ? hero.value : ""
+
+  readonly property string planLine: {
+    if (!currentProvider)
+      return "";
+    if (currentProvider.planLabel && currentProvider.planLabel !== "")
+      return currentProvider.planLabel;
+    if (currentEntry && currentEntry.plan && currentEntry.plan !== "")
+      return currentEntry.plan;
+    return "";
+  }
+
+  function severityColor(sev) {
+    switch (sev) {
+    case "critical":
+      return Color.mError;
+    case "high":
+      return "#FFB020";
+    case "mid":
+      return Color.mPrimary;
+    default:
+      return Color.mTertiary;
+    }
+  }
+
   readonly property var validInfo: {
     if (!currentProvider || !currentProvider.validUntil)
       return null;
@@ -58,6 +94,30 @@ Item {
       days: days,
       soon: Logic.isExpiringSoon(days)
     };
+  }
+
+  // Sections of the current entry, split by render type (hero excluded).
+  readonly property var metricSections: {
+    var out = [];
+    if (!currentEntry || !hero)
+      return out;
+    for (var i = 0; i < currentEntry.sections.length; i++) {
+      var s = currentEntry.sections[i];
+      if (s.type === 'metric' && s.key !== hero.key)
+        out.push(s);
+    }
+    return out;
+  }
+
+  readonly property var blockSections: {
+    var out = [];
+    if (!currentEntry)
+      return out;
+    for (var j = 0; j < currentEntry.sections.length; j++) {
+      if (currentEntry.sections[j].type === 'block')
+        out.push(currentEntry.sections[j]);
+    }
+    return out;
   }
 
   function metricLabel(key) {
@@ -70,6 +130,38 @@ Item {
     if (key === "balance")
       return trFn("panel.balance_label");
     return key;
+  }
+
+  function blockLabel(key) {
+    if (!trFn)
+      return "";
+    if (key === "tools")
+      return trFn("panel.tools_label");
+    if (key === "breakdown")
+      return trFn("panel.breakdown_label");
+    if (key === "key")
+      return trFn("panel.key_label");
+    return key;
+  }
+
+  // Sub-line of a metric card: humanised detail + reset countdown.
+  function metricSubline(sec) {
+    if (!trFn)
+      return "";
+    var parts = [];
+    var detail = sec.detail || "";
+    if (/^\d+$/.test(detail)) {
+      // bare number = remaining units of a quota
+      parts.push(trFn("panel.remaining_num").replace("{num}", detail));
+    } else if (detail !== "") {
+      parts.push(detail);
+    }
+    if (sec.resetAt > 0) {
+      var time = Qt.formatDateTime(new Date(sec.resetAt), "HH:mm");
+      var dur = Logic.formatDuration(Logic.remainingMs(sec.resetAt, now), hUnit, mUnit);
+      parts.push(trFn("panel.resets").replace("{time}", time).replace("{duration}", dur));
+    }
+    return parts.join("  ·  ");
   }
 
   function updatedText() {
@@ -92,25 +184,42 @@ Item {
       id: contentCol
       anchors.fill: parent
       anchors.margins: Style.marginM
-      spacing: Style.marginS
+      spacing: Style.marginM
 
-      // --- header: title + refresh -----------------------------------------
+      // --- header: provider identity + refresh ------------------------------
       RowLayout {
         Layout.fillWidth: true
         spacing: Style.marginS
 
-        NIcon {
-          icon: "gauge"
-          color: Color.mPrimary
+        ProviderChip {
+          visible: root.currentProvider !== null
+          monogram: root.mainInstance && root.currentProvider ? root.mainInstance.chipFor(root.currentProvider).monogram : "?"
+          chipColor: root.mainInstance && root.currentProvider ? root.mainInstance.chipFor(root.currentProvider).color : Color.mOnSurfaceVariant
+          size: Style.fontSizeXXL
         }
 
-        NText {
+        ColumnLayout {
           Layout.fillWidth: true
-          text: root.trFn ? root.trFn("panel.header") : ""
-          color: Color.mOnSurface
-          pointSize: Style.fontSizeXL
-          font.bold: true
-          elide: Text.ElideRight
+          spacing: 0
+
+          NText {
+            Layout.fillWidth: true
+            text: root.currentProvider && root.mainInstance ? root.mainInstance.displayLabel(root.currentProvider) : (root.trFn ? root.trFn("panel.header") : "")
+            color: Color.mOnSurface
+            pointSize: Style.fontSizeXL
+            font.bold: true
+            elide: Text.ElideRight
+          }
+
+          NText {
+            Layout.fillWidth: true
+            visible: root.planLine !== ""
+            text: root.planLine
+            color: Color.mOnSurfaceVariant
+            pointSize: Style.fontSizeS
+            font.capitalization: Font.AllUppercase
+            elide: Text.ElideRight
+          }
         }
 
         NIconButton {
@@ -140,9 +249,9 @@ Item {
             readonly property var m: root.mainInstance
 
             Layout.fillWidth: true
-            Layout.preferredHeight: Style.fontSizeL + Style.marginS * 2
-            radius: Style.radiusS
-            color: active ? Qt.rgba(Color.mPrimary.r, Color.mPrimary.g, Color.mPrimary.b, 0.18) : Color.mSurfaceVariant
+            Layout.preferredHeight: Style.fontSizeM + Style.marginS * 2
+            radius: height / 2
+            color: active ? Qt.rgba(Color.mPrimary.r, Color.mPrimary.g, Color.mPrimary.b, 0.16) : Color.mSurfaceVariant
             border.width: active ? 1 : 0
             border.color: Color.mPrimary
             opacity: modelData.enabled ? 1 : 0.4
@@ -162,13 +271,13 @@ Item {
               ProviderChip {
                 monogram: tab.m ? tab.m.chipFor(tab.modelData).monogram : "?"
                 chipColor: tab.m ? tab.m.chipFor(tab.modelData).color : Color.mOnSurfaceVariant
-                size: Style.fontSizeM
+                size: Style.fontSizeS
               }
 
               NText {
                 text: tab.m ? tab.m.displayLabel(tab.modelData) : ""
                 color: tab.active ? Color.mOnSurface : Color.mOnSurfaceVariant
-                pointSize: Style.fontSizeS
+                pointSize: Style.fontSizeXS
                 font.bold: tab.active
                 elide: Text.ElideRight
               }
@@ -177,7 +286,7 @@ Item {
                 visible: tab.failing
                 text: "⚠"
                 color: Color.mError
-                pointSize: Style.fontSizeS
+                pointSize: Style.fontSizeXS
               }
             }
           }
@@ -217,78 +326,233 @@ Item {
         }
       }
 
-      // --- valid until -----------------------------------------------------------
-      NText {
+      // --- HERO: the headline metric ---------------------------------------
+      NBox {
         Layout.fillWidth: true
-        visible: root.validInfo !== null
-        text: root.validInfo && root.trFn ? root.trFn("desktop_widget.until").replace("{date}", root.validInfo.date).replace("{days}", root.validInfo.days) : ""
-        color: root.validInfo && root.validInfo.soon ? "#FFB020" : Color.mOnSurfaceVariant
-        pointSize: Style.fontSizeS
-      }
+        visible: root.hero !== null
+        implicitHeight: heroRow.implicitHeight + Style.marginM * 2
 
-      // --- metrics of the selected provider -----------------------------------------
-      NDivider {
-        Layout.fillWidth: true
-        visible: root.currentEntry !== null
-      }
+        RowLayout {
+          id: heroRow
+          anchors.fill: parent
+          anchors.margins: Style.marginM
+          spacing: Style.marginL
 
-      NText {
-        Layout.fillWidth: true
-        visible: root.currentEntry !== null
-        text: root.trFn ? root.trFn("panel.section_title") : ""
-        color: Color.mOnSurfaceVariant
-        pointSize: Style.fontSizeXS
-      }
-
-      Repeater {
-        model: root.currentEntry ? root.currentEntry.sections : []
-
-        delegate: ColumnLayout {
-          id: secRow
-          required property var modelData
-
-          Layout.fillWidth: true
-
-          Loader {
-            Layout.fillWidth: true
-            active: secRow.modelData.type === 'metric'
-            sourceComponent: UsageRow {
-              Layout.fillWidth: true
-              section: secRow.modelData
-              label: root.metricLabel(secRow.modelData.key)
-              detail: secRow.modelData.key === "session" && root.trFn && secRow.modelData.percent !== null && secRow.modelData.percent !== undefined ? root.trFn("panel.remaining").replace("{percent}", String(100 - secRow.modelData.percent)) : secRow.modelData.detail
-              now: root.now
-              tr: root.trFn
-              hUnit: root.hUnit
-              mUnit: root.mUnit
-            }
+          // Ring gauge with the REMAINING share (window vendors)
+          NCircleStat {
+            visible: root.heroPercent
+            ratio: root.heroLeft / 100
+            fillColor: root.hero ? root.severityColor(root.hero.severity) : Color.mTertiary
+            suffix: "%"
+            contentScale: 1.5
           }
 
           ColumnLayout {
             Layout.fillWidth: true
-            visible: secRow.modelData.type === 'block'
-            spacing: 0
+            spacing: Style.marginXXS
 
             NText {
               Layout.fillWidth: true
-              Layout.topMargin: Style.marginS
-              visible: text !== ""
-              text: secRow.modelData.key === 'tools' ? (root.trFn ? root.trFn("panel.tools_label") : "") : ""
+              text: root.hero ? root.metricLabel(root.hero.key) : ""
               color: Color.mOnSurfaceVariant
               pointSize: Style.fontSizeXS
+              font.capitalization: Font.AllUppercase
+              elide: Text.ElideRight
             }
 
-            Repeater {
-              model: secRow.modelData.type === 'block' ? secRow.modelData.body : []
+            // Big money value (balance vendors; for mixed vendors a side note)
+            NText {
+              Layout.fillWidth: true
+              visible: root.heroMoney !== ""
+              text: root.heroMoney
+              color: root.hero ? root.severityColor(root.hero.severity) : Color.mOnSurface
+              pointSize: root.heroPercent ? Style.fontSizeL : Style.fontSizeXXXL
+              font.bold: true
+              elide: Text.ElideRight
+            }
+
+            // reset countdown for window metrics
+            NText {
+              Layout.fillWidth: true
+              visible: text !== "" && root.hero && root.heroPercent && root.hero.resetAt > 0
+              text: {
+                if (!root.trFn || !root.hero || !(root.hero.resetAt > 0))
+                  return "";
+                var time = Qt.formatDateTime(new Date(root.hero.resetAt), "HH:mm");
+                var dur = Logic.formatDuration(Logic.remainingMs(root.hero.resetAt, root.now), root.hUnit, root.mUnit);
+                return root.trFn("panel.resets").replace("{time}", time).replace("{duration}", dur);
+              }
+              color: Color.mOnSurfaceVariant
+              pointSize: Style.fontSizeS
+              elide: Text.ElideRight
+            }
+
+            // valid-until chip
+            Rectangle {
+              Layout.topMargin: Style.marginXXS
+              visible: root.validInfo !== null
+              implicitWidth: chipText.implicitWidth + Style.marginS * 2
+              implicitHeight: chipText.implicitHeight + Style.marginXS * 2
+              radius: height / 2
+              readonly property color c: root.validInfo && root.validInfo.soon ? "#FFB020" : Color.mOnSurfaceVariant
+              color: Qt.rgba(c.r, c.g, c.b, 0.10)
+              border.width: 1
+              border.color: Qt.rgba(c.r, c.g, c.b, 0.45)
 
               NText {
+                id: chipText
+                anchors.centerIn: parent
+                text: root.validInfo && root.trFn ? root.trFn("desktop_widget.until").replace("{date}", root.validInfo.date).replace("{days}", root.validInfo.days) : ""
+                color: parent.c
+                pointSize: Style.fontSizeXS
+              }
+            }
+          }
+        }
+      }
+
+      // --- metric cards (everything except the headline) --------------------
+      NText {
+        Layout.fillWidth: true
+        visible: root.metricSections.length > 0
+        text: root.trFn ? root.trFn("panel.section_title") : ""
+        color: Color.mOnSurfaceVariant
+        pointSize: Style.fontSizeXS
+        font.capitalization: Font.AllUppercase
+      }
+
+      Repeater {
+        model: root.metricSections
+
+        delegate: NBox {
+          id: metricCard
+          required property var modelData
+          Layout.fillWidth: true
+          implicitHeight: metricCol.implicitHeight + Style.marginM * 2
+
+          ColumnLayout {
+            id: metricCol
+            anchors.fill: parent
+            anchors.margins: Style.marginM
+            spacing: Style.marginXS
+
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.marginS
+
+              NText {
+                Layout.fillWidth: true
+                text: root.metricLabel(metricCard.modelData.key)
+                color: Color.mOnSurface
+                pointSize: Style.fontSizeM
+                font.bold: true
+                elide: Text.ElideRight
+              }
+
+              NText {
+                visible: metricCard.modelData.value !== ""
+                text: metricCard.modelData.value
+                color: root.severityColor(metricCard.modelData.severity)
+                pointSize: Style.fontSizeL
+                font.bold: true
+              }
+            }
+
+            UsageBar {
+              Layout.fillWidth: true
+              visible: metricCard.modelData.percent !== null && metricCard.modelData.percent !== undefined
+              pct: metricCard.modelData.percent || 0
+              severity: metricCard.modelData.severity
+            }
+
+            NText {
+              Layout.fillWidth: true
+              visible: text !== ""
+              text: root.metricSubline(metricCard.modelData)
+              color: Color.mOnSurfaceVariant
+              pointSize: Style.fontSizeS
+              elide: Text.ElideRight
+            }
+          }
+        }
+      }
+
+      // --- block cards (tools with gauges, breakdown, key info) -------------
+      Repeater {
+        model: root.blockSections
+
+        delegate: NBox {
+          id: blockCard
+          required property var modelData
+          Layout.fillWidth: true
+          implicitHeight: blockCol.implicitHeight + Style.marginM * 2
+
+          ColumnLayout {
+            id: blockCol
+            anchors.fill: parent
+            anchors.margins: Style.marginM
+            spacing: Style.marginXS
+
+            NText {
+              Layout.fillWidth: true
+              text: root.blockLabel(blockCard.modelData.key)
+              color: Color.mOnSurfaceVariant
+              pointSize: Style.fontSizeXS
+              font.capitalization: Font.AllUppercase
+            }
+
+            // tools: rows with a ratio gauge per tool
+            Repeater {
+              visible: blockCard.modelData.key === 'tools' && blockCard.modelData.items !== undefined
+              model: visible ? blockCard.modelData.items : []
+
+              delegate: ColumnLayout {
+                required property var modelData
+                Layout.fillWidth: true
+                spacing: Style.marginXXS
+
+                RowLayout {
+                  Layout.fillWidth: true
+                  spacing: Style.marginS
+
+                  NText {
+                    Layout.fillWidth: true
+                    text: modelData.name
+                    color: Color.mOnSurface
+                    pointSize: Style.fontSizeS
+                    elide: Text.ElideRight
+                  }
+
+                  NText {
+                    text: modelData.usage
+                    color: Color.mOnSurfaceVariant
+                    pointSize: Style.fontSizeS
+                    font.bold: true
+                  }
+                }
+
+                NLinearGauge {
+                  Layout.fillWidth: true
+                  Layout.preferredHeight: 4
+                  orientation: Qt.Horizontal
+                  ratio: blockCard.modelData.limit > 0 ? modelData.usage / blockCard.modelData.limit : 0
+                  fillColor: Color.mTertiary
+                }
+              }
+            }
+
+            // plain body lines (breakdown, key info)
+            Repeater {
+              visible: blockCard.modelData.key !== 'tools' || blockCard.modelData.items === undefined
+              model: visible ? blockCard.modelData.body : []
+
+              delegate: NText {
                 required property string modelData
                 Layout.fillWidth: true
-                Layout.topMargin: Style.marginXXS
                 text: modelData
                 color: Color.mOnSurfaceVariant
                 pointSize: Style.fontSizeS
-                opacity: 0.8
+                elide: Text.ElideRight
               }
             }
           }

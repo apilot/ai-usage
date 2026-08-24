@@ -183,6 +183,7 @@ DraggableDesktopWidget {
           text: root.planLine
           color: Color.mOnSurfaceVariant
           pointSize: root.scaledFontSizeS
+          font.capitalization: Font.AllUppercase
           elide: Text.ElideRight
         }
       }
@@ -221,13 +222,27 @@ DraggableDesktopWidget {
       elide: Text.ElideRight
     }
 
-    NText {
-      Layout.fillWidth: true
+    // --- valid-until chip ------------------------------------------------------
+    Rectangle {
+      Layout.fillWidth: false
+      Layout.alignment: Qt.AlignLeft
+      Layout.topMargin: root.scaledMarginS / 2
       visible: root.validInfo !== null
-      text: root.validInfo && root.trFn ? root.trFn("desktop_widget.until").replace("{date}", root.validInfo.date).replace("{days}", root.validInfo.days) : ""
-      color: root.validInfo && root.validInfo.soon ? "#FFB020" : Color.mOnSurfaceVariant
-      pointSize: root.scaledFontSizeS
-      elide: Text.ElideRight
+      implicitWidth: untilText.implicitWidth + root.scaledMarginS * 2
+      implicitHeight: untilText.implicitHeight + Math.round(2 * root.widgetScale) * 2
+      radius: height / 2
+      readonly property color c: root.validInfo && root.validInfo.soon ? "#FFB020" : Color.mOnSurfaceVariant
+      color: Qt.rgba(c.r, c.g, c.b, 0.10)
+      border.width: Math.max(1, Math.round(root.widgetScale))
+      border.color: Qt.rgba(c.r, c.g, c.b, 0.45)
+
+      NText {
+        id: untilText
+        anchors.centerIn: parent
+        text: root.validInfo && root.trFn ? root.trFn("desktop_widget.until").replace("{date}", root.validInfo.date).replace("{days}", root.validInfo.days) : ""
+        color: parent.c
+        pointSize: root.scaledFontSizeS
+      }
     }
 
     // --- other providers --------------------------------------------------------
