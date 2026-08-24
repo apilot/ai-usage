@@ -1,19 +1,20 @@
 {
-  "id": "zai-usage",
-  "name": "Z.AI Usage",
-  "version": "0.1.0",
+  "id": "ai-usage",
+  "name": "AI Usage",
+  "version": "0.2.0",
   "minNoctaliaVersion": "3.7.1",
   "author": "aboyarinov",
   "license": "MIT",
-  "repository": "https://github.com/aboyarinov/noctalia-zai-usage",
-  "description": "GLM Coding Plan usage monitor for Noctalia Shell: 5-hour session quota, weekly MCP-tools quota and reset countdown. UI ported from akitaonrails/ai-usagebar (KDE plasmoid).",
-  "tags": ["Bar", "Desktop", "Panel", "Monitoring"],
+  "repository": "https://github.com/aboyarinov/noctalia-ai-usage",
+  "description": "AI plan usage monitor for Noctalia Shell: 5-hour session quota, weekly MCP-tools quota and reset countdown (z.ai GLM Coding Plan). UI ported from akitaonrails/ai-usagebar (KDE plasmoid).",
+  "tags": ["Bar", "Desktop", "Panel", "Control Center", "Monitoring"],
   "entryPoints": {
     "main": "Main.qml",
     "barWidget": "BarWidget.qml",
     "desktopWidget": "DesktopWidget.qml",
     "panel": "Panel.qml",
-    "settings": "Settings.qml"
+    "settings": "Settings.qml",
+    "controlCenterWidget": "ControlCenterWidget.qml"
   },
   "dependencies": {
     "plugins": []

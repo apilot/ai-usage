@@ -64,7 +64,7 @@ Item {
       if (xhr.status !== 200) {
         // Keep the last good entry; views mark it as stale.
         root.lastError = "HTTP " + xhr.status;
-        Logger.w("ZaiUsage", "fetch failed: " + root.lastError);
+        Logger.w("AiUsage", "fetch failed: " + root.lastError);
         return;
       }
       var doc = null;
@@ -72,17 +72,17 @@ Item {
         doc = JSON.parse(xhr.responseText);
       } catch (e) {
         root.lastError = "invalid JSON";
-        Logger.w("ZaiUsage", root.lastError);
+        Logger.w("AiUsage", root.lastError);
         return;
       }
       var r = Logic.parseQuota(doc, Date.now());
       if (r.ok) {
         root.entry = r.entry;
         root.lastError = "";
-        Logger.d("ZaiUsage", "usage updated");
+        Logger.d("AiUsage", "usage updated");
       } else {
         root.lastError = r.error;
-        Logger.w("ZaiUsage", "parse failed: " + r.error);
+        Logger.w("AiUsage", "parse failed: " + r.error);
       }
     };
     xhr.send();
@@ -113,13 +113,13 @@ Item {
     // Defensive defaults (the framework merges manifest defaults, but a
     // missing key must never produce NaN intervals).
     if (!pluginApi.pluginSettings) {
-      Logger.w("ZaiUsage", "pluginSettings unavailable");
+      Logger.w("AiUsage", "pluginSettings unavailable");
       return;
     }
     if (pluginApi.pluginSettings.refreshMinutes === undefined)
       pluginApi.pluginSettings.refreshMinutes = 5;
     if (pluginApi.pluginSettings.showWeekly === undefined)
       pluginApi.pluginSettings.showWeekly = true;
-    Logger.i("ZaiUsage", "service started");
+    Logger.i("AiUsage", "service started");
   }
 }

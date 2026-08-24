@@ -1,1 +1,4 @@
 plugins.json.bak*
+
+# runtime plugin settings (contains user API key — never commit)
+settings.json

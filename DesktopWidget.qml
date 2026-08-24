@@ -85,7 +85,7 @@ DraggableDesktopWidget {
 
   Component.onCompleted: {
     if (pluginApi)
-      Logger.i("ZaiUsage", "desktop widget initialized");
+      Logger.i("AiUsage", "desktop widget initialized");
   }
 
   MouseArea {

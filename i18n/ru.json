@@ -1,6 +1,6 @@
 {
   "desktop_widget": {
-    "title": "z.ai",
+    "title": "AI",
     "remaining": "осталось {percent}%",
     "reset_in": "сброс через {duration}",
     "reset_at": "в {time}",
@@ -10,7 +10,7 @@
     "loading": "…"
   },
   "panel": {
-    "header": "Z.AI Coding Plan",
+    "header": "AI Usage",
     "plan": "план: {plan}",
     "section_title": "ИСПОЛЬЗОВАНИЕ",
     "session_label": "Сессия (5ч)",
@@ -45,10 +45,10 @@
     "saved": "Настройки сохранены"
   },
   "bar_widget": {
-    "tooltip": "z.ai · осталось {percent}% · сброс через {duration}"
+    "tooltip": "AI · осталось {percent}% · сброс через {duration}"
   },
   "main": {
-    "fetch_error": "z.ai usage: ошибка запроса: {error}"
+    "fetch_error": "AI usage: ошибка запроса: {error}"
   },
   "units": {
     "h": "ч",

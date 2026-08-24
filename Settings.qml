@@ -24,7 +24,7 @@ ColumnLayout {
   spacing: Style.marginL
 
   Component.onCompleted: {
-    Logger.i("ZaiUsage", "settings UI loaded");
+    Logger.i("AiUsage", "settings UI loaded");
   }
 
   function persist(key, value) {

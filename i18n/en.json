@@ -1,6 +1,6 @@
 {
   "desktop_widget": {
-    "title": "z.ai",
+    "title": "AI",
     "remaining": "{percent}% left",
     "reset_in": "resets in {duration}",
     "reset_at": "at {time}",
@@ -10,7 +10,7 @@
     "loading": "…"
   },
   "panel": {
-    "header": "Z.AI Coding Plan",
+    "header": "AI Usage",
     "plan": "plan: {plan}",
     "section_title": "USAGE",
     "session_label": "Session (5h)",
@@ -45,10 +45,10 @@
     "saved": "Settings saved"
   },
   "bar_widget": {
-    "tooltip": "z.ai · {percent}% left · resets in {duration}"
+    "tooltip": "AI · {percent}% left · resets in {duration}"
   },
   "main": {
-    "fetch_error": "z.ai usage fetch failed: {error}"
+    "fetch_error": "AI usage fetch failed: {error}"
   },
   "units": {
     "h": "h",
