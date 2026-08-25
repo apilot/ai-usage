@@ -103,15 +103,33 @@ script = "src/panel.luau"
 
 ## 5. Decision points (need user before/during Phase 2)
 
-### 5.1 Crypto at rest (blocker for store.luau design)
-- **(a) Plaintext keys in providers.json + 0600-ish protection by host** — community
-  norm (deepseek_usage stores `api_key` plaintext). Fastest, honest.
-- **(b) Keep envelope, invoke openssl via runAsync** — secrets (key AND passphrase)
-  land in argv, visible in /proc. Worse than v4, arguably theater.
-- **(c) RECOMMENDED: (a) now + upstream issue** asking for env/stdin in runAsync
-  (or a native crypto API); re-introduce envelope when available. providers.json
-  schema keeps an `enc:v1:`-ready string field so migration back is trivial.
-  Document threat model in README (same honesty as v4).
+### 5.1 Crypto at rest — DECIDED (d) + optional keyring (2026-08-25)
+Research reversed the "no env/stdin in runAsync" premise:
+- runAsync **string form** runs via `/bin/sh -c` (pipes/redirects/expansion
+  work); **argv form** (plugin_api≥24) execs directly — docs recommend it for
+  dynamic values.
+- openssl supports `-kfile <file>` (passphrase from file) and `-in/-out <file>`
+  (data via files), verified on local openssl 3.5.7.
+
+**PRIMARY (d): v4-parity envelope, argv-form openssl, zero secrets in argv.**
+`fs.writeFile(tmpKey)` + `fs.writeFile(tmpPass)` in pluginDataDir() →
+`runAsync({openssl, enc, -aes-256-cbc, -pbkdf2, -iter 600000, -salt, -a, -A,
+-in tmpKey, -kfile tmpPass}, cb)` → `removeFile` temps immediately. argv holds
+only flags + file paths; plaintext lives ~ms in a temp file inside
+pluginDataDir (same-user readable — already the threat-model boundary;
+machine-id is 0444). Envelope format stays `enc:v1:<b64url>:<hmac>:<hint>` →
+crypto.luau is a 1:1 port of the tested JS math (FIPS/RFC vectors as gate).
+
+**OPTIONAL backend: OS keychain.** secret-tool + gnome-keyring are live on
+this machine; if available at runtime → keys in keyring (never enter
+~/.config backups at all), envelope as fallback. Detection:
+`noctalia.commandExists("secret-tool")`; lookup prints secret to stdout
+(captured in runAsync cb, never argv); write feeds stdin via shell-form
+redirect `< file`. Backend field in providers.json schema: `"keyring"`.
+
+DROPPED: (a) plaintext (community norm, but we can do better), (b) argv
+secrets (visible in /proc — worse than v4). Schema stays envelope-ready for
+either backend.
 
 ### 5.2 v5 shell install timing
 Live validation requires Noctalia v5 (beta.9). Options: install early (Phase 1,
@@ -129,10 +147,17 @@ surprises (http timeout, writeFile perms) feed back into design.
 
 ## 6. Phases (each ends with a validation gate)
 
-**Phase 0 — scaffold (~0.5h)** [approval: this plan]
+**Phase 0 — scaffold + sandbox probes (~1h)** [approval: this plan]
 - Branch `luau-v5` (done), repo restructure-free: add plan (this file), fetch
   `noctalia.d.luau` (gitignored), `.luaurc` (nonstrict), stylua config.
-- Gate: `stylua --check src/ tests/` clean on empty stubs; plugin.toml drafted.
+- **Live sandbox probes on v5** (feed crypto.luau design):
+  (p1) `string.byte` / `bit32` availability (crypto math depends on it);
+  (p2) argv-form runAsync returns `CommandResult.stdout` (envelope roundtrip
+  via openssl -in/-kfile);
+  (p3) `fs.writeFile` resulting permissions (claude creds need 0600);
+  (p4) `secret-tool` detection path works from sandbox (commandExists).
+- Gate: `stylua --check src/ tests/` clean on empty stubs; plugin.toml drafted;
+  probe results recorded here.
 
 **Phase 1 — logic.luau TDD port (~4-6h)** [pure, no runtime deps]
 - Port Logic.js → logic.luau + providers.luau in **Lua 5.1-compatible subset**
@@ -185,13 +210,15 @@ Total estimate: ~16-21h focused work.
 | # | Risk | Mitigation |
 |---|---|---|
 | R1 | `http` has no timeout field | Own deadline watchdog per request (timer + ignore late cb); report upstream |
-| R2 | `runAsync` argv-only → secrets visible | Decision 5.1; prefer (c) |
+| R2 | ~~`runAsync` argv-only → secrets visible~~ RESOLVED | openssl argv form + `-in/-kfile` temp files (§5.1d); secrets never in argv |
 | R3 | `writeFile` perms unknown (claude creds need 0600) | Probe on v5 (fileInfo); if 0644 — document + upstream issue |
 | R4 | v5 beta.9 API drift vs noctalia.d.luau | Pin plugin_api; smoke early (5.2) |
 | R5 | No list-type settings (by design) | store.luau — already the plan |
 | R6 | Lua 5.1 subset friction (no continue/goto) | Style rules in logic.luau header; stylua keeps it honest |
 | R7 | bar render constraints (no input/scroll in bar) | Capsule needs labels only — fine |
 | R8 | Both shells on one machine confusion | v5 config separate; port tested against pluginDataDir copies, never touches live v4 settings until migration is explicit |
+| R9 | Keyring backend = optional dependency (secret-tool/keyring may be absent) | Graceful detection via commandExists; envelope fallback is the default path; both documented |
+| R10 | Sandbox stdlib unverified: bit32 / string.byte availability unknown (no reference plugin uses them) | Phase 0 live probes BEFORE logic port; crypto math needs string.byte (b64/hex) — if absent, host-side fallback or rethink |
 
 ## 8. Non-goals (explicit)
 
@@ -204,3 +231,7 @@ Total estimate: ~16-21h focused work.
 ## 9. Change log
 
 - 2026-08-25: plan drafted on `luau-v5` (this file).
+- 2026-08-25: §5.1 DECIDED (d) — v4-parity envelope via openssl argv form +
+  `-in/-kfile` temp files (secrets never in argv; runAsync shell/argv semantics
+  verified against official docs); optional OS-keyring backend added; risks
+  R2 resolved, R9/R10 added; Phase 0 now includes live sandbox probes.
