@@ -40,39 +40,22 @@ DraggableDesktopWidget {
   readonly property var headline: mainInstance && activeEntry ? mainInstance.headlineSection(activeEntry) : null
   readonly property int leftPct: mainInstance && activeEntry ? mainInstance.leftPercent(activeEntry) : -1
   readonly property bool isPercentMode: leftPct >= 0
-  readonly property string planLine: {
-    if (!activeProvider)
-      return "";
-    if (activeProvider.planLabel && activeProvider.planLabel !== "")
-      return activeProvider.planLabel;
-    if (activeEntry && activeEntry.plan && activeEntry.plan !== "")
-      return activeEntry.plan;
-    return "";
-  }
+  readonly property string planLine: Logic.planLine(activeProvider, activeEntry)
 
   readonly property color accentColor: {
     if (!headline)
       return Color.mOnSurfaceVariant;
-    switch (headline.severity) {
-    case "critical":
-      return Color.mError;
-    case "high":
-      return Color.mSecondary;
-    case "mid":
-      return Color.mPrimary;
-    default:
-      return Color.mTertiary;
-    }
+    return mainInstance ? mainInstance.severityColor(headline.severity) : Color.mTertiary;
   }
 
   readonly property var validInfo: {
     if (!activeProvider || !activeProvider.validUntil)
       return null;
-    var days = Logic.daysLeft(activeProvider.validUntil, now);
-    return days === null ? null : {
-      date: Qt.formatDateTime(new Date(Logic.parseValidUntilDate(activeProvider.validUntil)), "dd.MM"),
-      days: days,
-      soon: Logic.isExpiringSoon(days)
+    var info = Logic.validUntilInfo(activeProvider.validUntil, now);
+    return info === null ? null : {
+      date: Qt.formatDateTime(new Date(info.epochMs), "dd.MM"),
+      days: info.days,
+      soon: info.soon
     };
   }
 
@@ -86,7 +69,7 @@ DraggableDesktopWidget {
         return trFn("desktop_widget.error");
       if (activeProvider && (!activeProvider.apiKey || activeProvider.apiKey === ""))
         return trFn("desktop_widget.no_key");
-      return fetching[activeId] ? trFn("desktop_widget.loading") : trFn("desktop_widget.loading");
+      return trFn("desktop_widget.loading");
     }
     if (isPercentMode)
       return leftPct + "%";
@@ -202,8 +185,10 @@ DraggableDesktopWidget {
       Layout.fillWidth: true
       Layout.preferredHeight: root.scaledBarHeight
       visible: root.isPercentMode
-      pct: root.headline ? root.headline.percent : 0
-      severity: root.headline ? root.headline.severity : "low"
+      pct: (root.headline && root.headline.percent) || 0
+      fillColor: root.mainInstance && root.headline
+        ? root.mainInstance.severityColor(root.headline.severity)
+        : Color.mTertiary
     }
 
     // --- reset / valid-until lines ---------------------------------------------

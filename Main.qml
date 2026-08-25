@@ -6,6 +6,15 @@
 //   errors           — { providerId: message } ('' when healthy)
 //   fetching         — { providerId: bool }
 //   activeProviderId / activeEntry — convenience for bar & CC widgets
+//   cryptoReady      — passphrase derived; encrypt/decrypt usable
+//
+// Method surface used by the views (MockMain.qml in tests/bench mirrors it):
+//   chipFor(provider) / displayLabel(provider)  — identity presentation
+//   headlineSection(entry) / leftPercent(entry)  — compact-view metrics
+//   severityColor(sev)                           — severity → theme color
+//   setActive(id)                                 — switch active provider
+//   fetchProvider(p) / loadProviders()            — data lifecycle
+//   encryptSecret(plain, cb) / decryptSecret(env, cb)
 //
 // Each adapter may declare several HTTP requests (e.g. OpenRouter credits+key);
 // they are all resolved before adapter.parse() runs.
@@ -29,6 +38,10 @@ Item {
   property var entries: ({})
   property var errors: ({})
   property var fetching: ({})
+  // id → claim timestamp; the reaper force-frees slots wedged past
+  // staleSlotMs (worst claude chain = 2 curls × 20s + overhead).
+  property var fetchClaims: ({})
+  readonly property real staleSlotMs: 120000
   property real now: Date.now()
 
   // --- crypto state --------------------------------------------------------
@@ -36,14 +49,17 @@ Item {
   property bool cryptoDerived: false
   readonly property bool cryptoReady: cryptoPass !== ""
 
+  // pluginSettings is a plain var — sub-property writes emit no change
+  // signal, so dependents re-read via this counter bumped on every save.
+  property int settingsRevision: 0
+
   readonly property int refreshMs: {
+    settingsRevision;
     var m = Number(pluginApi && pluginApi.pluginSettings ? pluginApi.pluginSettings.refreshMinutes : 5);
     if (!isFinite(m) || m <= 0)
       m = 5;
     return Math.max(1, Math.min(60, Math.round(m))) * 60000;
   }
-
-  readonly property bool showBackground: pluginApi && pluginApi.pluginSettings && pluginApi.pluginSettings.showBackground !== undefined ? pluginApi.pluginSettings.showBackground : true
 
   function settingsObj() {
     return pluginApi ? pluginApi.pluginSettings : null;
@@ -52,6 +68,9 @@ Item {
   function saveSettings() {
     if (pluginApi && pluginApi.saveSettings)
       pluginApi.saveSettings();
+    // The framework rewrite can reset permissions — re-tighten on every save.
+    secureSettingsFile();
+    settingsRevision++;
   }
 
   // ------------------------------------------------------- at-rest crypto
@@ -148,7 +167,7 @@ Item {
       return;
     }
     runShell(
-      'printf %s "$KD" | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -a -A -pass pass:"$PP"',
+      'printf %s "$KD" | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -a -A -pass env:PP',
       { KD: plain, PP: root.cryptoPass },
       function (b64) {
         if (b64 === null) {
@@ -170,13 +189,15 @@ Item {
       return;
     }
     var expect = Logic.hmacSha256Hex(root.cryptoPass, Logic.envelopeHmacMessage(parts.blob, parts.hint));
+    // Non-constant-time compare: the threat model is corruption/tamper
+    // detection of a local file, not a remotely-timed oracle — acceptable.
     if (expect !== parts.hmac) {
       Logger.w("AiUsage", "key envelope failed integrity check");
       cb(null);
       return;
     }
     runShell(
-      'printf %s "$KD" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -a -A -pass pass:"$PP"',
+      'printf %s "$KD" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -a -A -pass env:PP',
       { KD: b64UrlToStd(parts.blob), PP: root.cryptoPass },
       function (plain) {
         cb(plain === null ? null : String(plain).replace(/[\r\n]+$/, ''));
@@ -211,15 +232,22 @@ Item {
           work.push({ obj: p, field: 'apiKey' });
       }
     }
-    if (work.length === 0) {
+    // Legacy v0.2 top-level apiKey duplicates zai_1's key once the provider
+    // list exists — drop it so settings.json stores each key exactly once.
+    var dropLegacy = Array.isArray(s.providers) && s.providers.length > 0
+        && typeof s.apiKey === 'string' && Logic.isEncryptedSecret(s.apiKey);
+    if (work.length === 0 && !dropLegacy) {
       Logger.i("AiUsage", "all keys already encrypted at rest");
       return;
     }
     var idx = 0;
     function step() {
       if (idx >= work.length) {
+        if (dropLegacy)
+          delete s.apiKey;
         saveSettings();
-        Logger.i("AiUsage", "encrypted " + work.length + " key(s) at rest");
+        Logger.i("AiUsage", "encrypted " + work.length + " key(s) at rest"
+                 + (dropLegacy ? " (legacy apiKey removed)" : ""));
         return;
       }
       var item = work[idx++];
@@ -276,6 +304,20 @@ Item {
     return a ? { monogram: a.monogram, color: a.color, name: a.name } : { monogram: '?', color: Color.mOnSurfaceVariant, name: p ? p.type : '' };
   }
 
+  // The single severity → theme-color mapping (views used to duplicate it).
+  function severityColor(sev) {
+    switch (sev) {
+    case "critical":
+      return Color.mError;
+    case "high":
+      return Color.mSecondary;
+    case "mid":
+      return Color.mPrimary;
+    default:
+      return Color.mTertiary;
+    }
+  }
+
   function setActive(id) {
     var s = settingsObj();
     if (!s || !providerById(id))
@@ -296,7 +338,8 @@ Item {
     return Logic.sectionByKey(entry, 'balance');
   }
 
-  // "46" (left) for percent metrics; null for balance vendors.
+  // "46" (left) for percent metrics; NO_PERCENT (-1) for balance vendors —
+  // consumers test >= 0.
   function leftPercent(entry) {
     var s = headlineSection(entry);
     if (!s || s.percent === null || s.percent === undefined)
@@ -325,6 +368,9 @@ Item {
     var f = Object.assign({}, root.fetching);
     f[p.id] = true;
     root.fetching = f;
+    var claims = Object.assign({}, root.fetchClaims);
+    claims[p.id] = Date.now();
+    root.fetchClaims = claims;
 
     if (adapter.keyless) {
       fetchClaude(p, adapter);
@@ -332,6 +378,12 @@ Item {
     }
 
     if (p.apiKey === "") {
+      releaseSlot(p.id);
+      return;
+    }
+    // Startup race: pollTimer fires before machine-id lands. Stay quiet —
+    // fetchAll() re-runs right after derivation (no spurious ⚠ flash).
+    if (!cryptoReady && Logic.isEncryptedSecret(p.apiKey)) {
       releaseSlot(p.id);
       return;
     }
@@ -354,6 +406,33 @@ Item {
     var f = Object.assign({}, root.fetching);
     f[id] = false;
     root.fetching = f;
+    var claims = Object.assign({}, root.fetchClaims);
+    if (claims[id] !== undefined) {
+      delete claims[id];
+      root.fetchClaims = claims;
+    }
+  }
+
+  // Belt-and-braces for wedged requests (all IO has 20s timeouts, but a
+  // subprocess that never exits would otherwise pin the slot forever).
+  function reapStaleSlots() {
+    var now = Date.now();
+    var reaped = [];
+    for (var id in root.fetching) {
+      if (root.fetching[id] && root.fetchClaims[id] !== undefined
+          && now - root.fetchClaims[id] > root.staleSlotMs)
+        reaped.push(id);
+    }
+    if (reaped.length === 0)
+      return;
+    var er = Object.assign({}, root.errors);
+    for (var i = 0; i < reaped.length; i++) {
+      er[reaped[i]] = 'fetch timed out';
+      Logger.w("AiUsage", "reaped stuck fetch slot " + reaped[i]);
+    }
+    root.errors = er;
+    for (var j = 0; j < reaped.length; j++)
+      releaseSlot(reaped[j]);
   }
 
   // Store a parse result (shared by the XHR path and the claude curl path).
@@ -375,7 +454,9 @@ Item {
   // ------------------------------------------------------------- claude (oauth)
 
   readonly property real claudeMinIntervalMs: 300000
-  property real claudeLastFetch: 0
+  // Per-provider throttle state (id → last fetch ts): two claude accounts
+  // must not starve each other through a shared timestamp.
+  property var claudeLastFetch: ({})
 
   // Claude reads the `claude` CLI credentials instead of a stored API key.
   // XHR cannot set User-Agent (the endpoint rejects requests without the
@@ -383,20 +464,23 @@ Item {
   // travel in env vars, never in argv.
   function fetchClaude(p, adapter) {
     var now = Date.now();
-    if (now - root.claudeLastFetch < root.claudeMinIntervalMs) {
+    if (now - (root.claudeLastFetch[p.id] || 0) < root.claudeMinIntervalMs) {
       releaseSlot(p.id);
       return;
     }
-    root.claudeLastFetch = now;
+    root.claudeLastFetch[p.id] = now;
     runShell('cat "$HOME/.claude/.credentials.json" 2>/dev/null', null, function (out) {
+      var raw = out === null || out === undefined ? '' : String(out);
       var doc = null;
       try {
-        doc = JSON.parse(out);
+        doc = JSON.parse(raw);
       } catch (e2) {
       }
       var oauth = doc && doc.claudeAiOauth ? doc.claudeAiOauth : null;
       if (!oauth) {
-        storeResult(p, { ok: false, error: 'claude CLI not logged in' });
+        // Empty file/missing = CLI never logged in; non-empty unparsable =
+        // corrupt — different remedies for the user.
+        storeResult(p, { ok: false, error: raw.trim() !== '' ? 'claude credentials unreadable' : 'claude CLI not logged in' });
         return;
       }
       var creds = {
@@ -420,7 +504,7 @@ Item {
   // grant (the server answers 400 and may spend the token).
   function claudeRefresh(p, adapter, creds, doc, done) {
     var script = 'BODY=$(printf \'{"grant_type":"refresh_token","client_id":"%s","refresh_token":"%s"}\' "$CID" "$RT")\n'
-      + 'curl -fsS -X POST "$RU" '
+      + 'curl -fsS --max-time 20 -X POST "$RU" '
       + '-H "anthropic-beta: oauth-2025-04-20" -H "User-Agent: claude-cli/1.0" '
       + '-H "Content-Type: application/json" --data "$BODY"';
     runShell(script, { RT: creds.refreshToken, RU: adapter.refreshUrl, CID: adapter.clientId },
@@ -436,10 +520,11 @@ Item {
                  return;
                }
                var next = Logic.applyClaudeRefresh(creds, resp, Date.now());
-               // The server MAY rotate the refresh token — persist or the
-               // user is silently logged out next time.
-               var fullDoc = Object.assign({}, doc, { claudeAiOauth: next });
-               runShell('umask 077; printf \'%s\' "$CJ" > "$HOME/.claude/.credentials.json"',
+                // The server MAY rotate the refresh token — persist or the
+                // user is silently logged out next time. chmod after write:
+                // umask only applies at creation, the file may already exist.
+                var fullDoc = Object.assign({}, doc, { claudeAiOauth: next });
+                runShell('umask 077; printf \'%s\' "$CJ" > "$HOME/.claude/.credentials.json" && chmod 600 "$HOME/.claude/.credentials.json"',
                         { CJ: JSON.stringify(fullDoc) },
                         function (written) {
                           if (written === null)
@@ -450,7 +535,7 @@ Item {
   }
 
   function claudeUsage(p, adapter, creds) {
-    var script = 'curl -fsS "$UU" '
+    var script = 'curl -fsS --max-time 20 "$UU" '
       + '-H "Authorization: Bearer $AT" '
       + '-H "anthropic-beta: oauth-2025-04-20" '
       + '-H "User-Agent: claude-code/2.1.183" '
@@ -482,26 +567,21 @@ Item {
       pending--;
       if (pending > 0)
         return;
-      var r = adapter.parse(responses, Date.now());
-      var e = Object.assign({}, root.entries);
-      var er = Object.assign({}, root.errors);
-      var fDone = Object.assign({}, root.fetching);
-      if (r.ok) {
-        e[p.id] = r.entry;
-        er[p.id] = '';
-      } else {
-        er[p.id] = r.error;
-        Logger.w("AiUsage", p.type + " parse failed: " + r.error);
-      }
-      fDone[p.id] = false;
-      root.entries = e;
-      root.errors = er;
-      root.fetching = fDone;
+      storeResult(p, adapter.parse(responses, Date.now()));
     };
     for (var i = 0; i < adapter.requests.length; i++) {
       (function (req) {
         var xhr = new XMLHttpRequest();
+        // Timeout can fire alongside readyState DONE — settle exactly once.
+        var settled = false;
+        var settle = function () {
+          if (settled)
+            return;
+          settled = true;
+          finishOne();
+        };
         xhr.open("GET", req.url);
+        xhr.timeout = 20000;
         var hdrs = req.headers(key);
         for (var k in hdrs)
           xhr.setRequestHeader(k, hdrs[k]);
@@ -518,7 +598,12 @@ Item {
             responses[req.id] = null;
             Logger.w("AiUsage", p.type + " " + req.id + " HTTP " + xhr.status);
           }
-          finishOne();
+          settle();
+        };
+        xhr.ontimeout = function () {
+          responses[req.id] = null;
+          Logger.w("AiUsage", p.type + " " + req.id + " request timeout");
+          settle();
         };
         xhr.send();
       })(adapter.requests[i]);
@@ -531,10 +616,6 @@ Item {
       if (p.enabled)
         fetchProvider(p);
     }
-  }
-
-  function fetchNow() {
-    fetchAll();
   }
 
   // ------------------------------------------------------------------ timers
@@ -556,6 +637,14 @@ Item {
     onTriggered: root.now = Date.now()
   }
 
+  Timer {
+    id: reaperTimer
+    interval: 30000
+    running: true
+    repeat: true
+    onTriggered: root.reapStaleSlots()
+  }
+
   Component.onCompleted: {
     if (!pluginApi)
       return;
@@ -565,7 +654,10 @@ Item {
   }
 
   onPluginApiChanged: {
-    if (pluginApi)
+    if (pluginApi) {
       loadProviders();
+      // Late-bound api must not leave crypto permanently dead.
+      derivePassphrase();
+    }
   }
 }

@@ -33,6 +33,18 @@ QtObject {
   property var fetching: ({})
   property real now: Date.now()
   property string activeProviderId: "zai_1"
+  readonly property string activeError: errors[activeProviderId] !== undefined ? errors[activeProviderId] : ""
+  readonly property var activeEntry: entries[activeProviderId] !== undefined ? entries[activeProviderId] : null
+  readonly property var activeProvider: (function () {
+    for (var i = 0; i < providers.length; i++)
+      if (providers[i].id === activeProviderId)
+        return providers[i];
+    return null;
+  })()
+  function leftPercent(e) {
+    var h = headlineSection(e);
+    return h && h.percent !== null && h.percent !== undefined ? 100 - h.percent : -1;
+  }
 
   function setActive(id) {
     activeProviderId = id;
@@ -48,6 +60,10 @@ QtObject {
 
   function headlineSection(e) {
     return e.sections.length > 0 ? e.sections[0] : null;
+  }
+
+  function severityColor(sev) {
+    return "#7c7cf0";
   }
 
   function fetchProvider(p) {}

@@ -54,6 +54,9 @@ Item {
         label: mainInstance.displayLabel(p),
         text: text,
         failing: !entry && err !== "",
+        // stale-data dimming: error with a cached entry keeps the old value,
+        // but visibly degraded
+        stale: entry && err !== "",
         active: p.id === mainInstance.activeProviderId
       });
     }
@@ -188,11 +191,13 @@ Item {
               // Hover is owned by the WHOLE capsule (segMouse passes hover
               // through), so hover inverts every segment at once — the stock
               // mHover background / mOnHover foreground pattern.
+              // stale: cached value shown while the last fetch failed.
               text: seg.modelData.text
               color: seg.modelData.failing ? Color.mError
                  : mouseArea.containsMouse ? Color.mOnHover
                  : seg.modelData.active ? Color.mOnSurface
                  : Color.mOnSurfaceVariant
+              opacity: seg.modelData.stale ? 0.55 : 1
               pointSize: root.barFontSize
               font.bold: seg.modelData.active
               applyUiScale: false

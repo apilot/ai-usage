@@ -192,6 +192,23 @@ Item {
         console.log("CLAUDE keyless error path OK:", err);
       if (mainService.fetching["claude_1"])
         bench.fail("claude_1 fetch slot not released");
+
+      // --- DesktopWidget + ControlCenterWidget coverage (review M-14) -----
+      var activeLabel = mockMain.displayLabel(mockMain.activeProvider);
+      if (desktop.valueLine === "")
+        bench.fail("desktop valueLine empty with a healthy active entry");
+      if (desktop.implicitHeight <= 0)
+        bench.fail("desktop widget has no height");
+      if (cc.tooltipText.indexOf(activeLabel) < 0)
+        bench.fail("CC tooltip lost the provider label: " + cc.tooltipText);
+      // error surfacing: inject an error → tooltip must show ⚠ (M-14 fix)
+      var errs = {};
+      errs[mockMain.activeProviderId] = "boom";
+      mockMain.errors = errs;
+      if (cc.tooltipText.indexOf("⚠") < 0)
+        bench.fail("CC tooltip hides active errors: " + cc.tooltipText);
+      mockMain.errors = ({});
+
       bench.finish();
     }
   }
@@ -213,12 +230,14 @@ Item {
         console.log("BENCH-FAIL:", failures[i]);
       Qt.exit(1);
     }
-    console.log("BENCH-OK: Settings + BarWidget + Panel + Main crypto + claude keyless verified");
+    console.log("BENCH-OK: Settings + BarWidget + Panel + Desktop + CC + Main crypto + claude keyless verified");
     Qt.exit(0);
   }
 
   Settings { id: pane; pluginApi: null }
   BarWidget { id: bar; pluginApi: bench.mockApi }
   Panel { id: panel; pluginApi: bench.mockApi }
+  DesktopWidget { id: desktop; pluginApi: bench.mockApi }
+  ControlCenterWidget { id: cc; pluginApi: bench.mockApi; screen: null }
   Main { id: mainService; pluginApi: bench.mainApi }
 }

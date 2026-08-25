@@ -45,10 +45,19 @@ ColumnLayout {
   }
 
   function persist() {
-    if (pluginApi && pluginApi.saveSettings)
+    // Prefer Main.saveSettings(): it re-tightens settings.json permissions
+    // after every framework write.
+    if (mainInstance && mainInstance.saveSettings)
+      mainInstance.saveSettings();
+    else if (pluginApi && pluginApi.saveSettings)
       pluginApi.saveSettings();
-    if (mainInstance)
+    if (mainInstance) {
+      // A key saved plaintext while crypto was unavailable gets encrypted
+      // here instead of surviving until the next shell restart.
+      if (mainInstance.migrateEncryption)
+        mainInstance.migrateEncryption();
       mainInstance.loadProviders();
+    }
   }
 
   function providerTypes() {

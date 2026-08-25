@@ -45,12 +45,13 @@ function loadLogic() {
     'PROVIDERS', 'parseMoney', 'formatMoney', 'migrateSettings',
     'parseValidUntilDate', 'daysLeft', 'isExpiringSoon', 'newProviderId',
     'severityOf', 'sectionByKey', 'formatDuration', 'remainingMs',
-    'safeText', 'finitePercent', 'normalizeProviderForm', 'mergeProviderForm', 'compactValue',
+    'safeText', 'finitePercent', 'finiteInt', 'normalizeProviderForm', 'mergeProviderForm', 'compactValue',
     'isEncryptedSecret', 'encryptedSecretParts', 'keyHintOf', 'keyMask',
     'buildEnvelope', 'envelopeHmacMessage', 'sha256Hex', 'hmacSha256Hex',
     'bytesToB64url', 'b64urlToBytes', 'strBytes',
     'claudePlanLabel', 'needsClaudeRefresh', 'applyClaudeRefresh',
     'parseClaudeUsage', 'parseAnthropicCostReport',
+    'moneySeverity', 'validUntilInfo', 'planLine', 'prettySectionKey',
   ];
   const factory = (0, eval)(`(function(){${src}\n; return {${exportsList.join(',')}};})()`);
   for (const name of exportsList)
@@ -243,6 +244,44 @@ test('migration: already v0.3 passes through untouched', () => {
   const m = Logic.migrateSettings(JSON.parse(JSON.stringify(current)));
   equal(m.providers[0].id, 'zai_1');
   equal(m.activeProviderId, 'zai_1');
+});
+
+test('migration: dangling activeProviderId reset to first provider', () => {
+  const s = {
+    providers: [
+      { id: 'zai_1', type: 'zai', apiKey: 'k', enabled: true },
+      { id: 'deepseek_1', type: 'deepseek', apiKey: 'd', enabled: true },
+    ],
+    activeProviderId: 'openrouter_9', // dropped/unknown id
+  };
+  const m = Logic.migrateSettings(JSON.parse(JSON.stringify(s)));
+  equal(m.activeProviderId, 'zai_1', 'falls back to first surviving provider');
+});
+
+test('migration: dangling activeProviderId with all dropped → empty', () => {
+  const s = { providers: [], activeProviderId: 'zai_1' };
+  const m = Logic.migrateSettings(JSON.parse(JSON.stringify(s)));
+  equal(m.activeProviderId, '');
+});
+
+test('migration: providers without keys are dropped (keyless exempt)', () => {
+  const s = {
+    providers: [
+      { id: 'zai_1', type: 'zai', apiKey: '', enabled: true },        // keyed, no key → dropped
+      { id: 'claude_1', type: 'claude', apiKey: '', enabled: true },  // keyless → kept
+    ],
+    activeProviderId: 'zai_1',
+  };
+  const m = Logic.migrateSettings(JSON.parse(JSON.stringify(s)));
+  equal(m.providers.length, 1);
+  equal(m.providers[0].id, 'claude_1');
+  equal(m.activeProviderId, 'claude_1', 'active moved off the dropped provider');
+});
+
+test('migration: refreshMinutes clamped to 1..60', () => {
+  equal(Logic.migrateSettings({ refreshMinutes: 0 }).refreshMinutes, 1);
+  equal(Logic.migrateSettings({ refreshMinutes: 999 }).refreshMinutes, 60);
+  equal(Logic.migrateSettings({ refreshMinutes: 'x' }).refreshMinutes, 5);
 });
 
 // ---------------------------------------------------------------------------
@@ -442,9 +481,61 @@ test('parseMoney: strings and numbers, garbage rejected', () => {
   equal(Logic.parseMoney('nope'), null);
 });
 
+test('parseMoney: comma decimal separator; mixed separators rejected', () => {
+  equal(Logic.parseMoney('1,5'), 1.5, 'comma acts as decimal point');
+  equal(Logic.parseMoney('1,100.25'), null, 'comma+dot mix → NaN → null (documented)');
+});
+
 test('formatMoney: USD symbol prefix, CNY suffix', () => {
   equal(Logic.formatMoney(74.5, 'USD'), '$74.50');
   equal(Logic.formatMoney(110, 'CNY'), '110.00 CNY');
+});
+
+test('prettySectionKey: claude per-model keys become human labels', () => {
+  equal(Logic.prettySectionKey('weekly_sonnet'), 'Sonnet weekly');
+  equal(Logic.prettySectionKey('limit_fable'), 'Fable limit');
+  equal(Logic.prettySectionKey('weekly_opus_4_6'), 'Opus 4 6 weekly');
+  equal(Logic.prettySectionKey('session'), 'Session');
+  equal(Logic.prettySectionKey('balance'), 'Balance');
+  equal(Logic.prettySectionKey(''), '');
+});
+
+// ---------------------------------------------------------------------------
+// View helpers (deduplicated from Panel/DesktopWidget, v0.5.1)
+// ---------------------------------------------------------------------------
+
+test('moneySeverity: USD thresholds, non-USD scaled ×7', () => {
+  equal(Logic.moneySeverity(0.5, 'USD'), 'critical');
+  equal(Logic.moneySeverity(1, 'USD'), 'critical');
+  equal(Logic.moneySeverity(5, 'USD'), 'high');
+  equal(Logic.moneySeverity(20, 'USD'), 'mid');
+  equal(Logic.moneySeverity(21, 'USD'), 'low');
+  equal(Logic.moneySeverity(7, 'CNY'), 'critical');
+  equal(Logic.moneySeverity(35, 'CNY'), 'high');
+  equal(Logic.moneySeverity(140, 'CNY'), 'mid');
+  equal(Logic.moneySeverity(141, 'CNY'), 'low');
+  equal(Logic.moneySeverity(null, 'USD'), 'low');
+  equal(Logic.moneySeverity('x', 'CNY'), 'low');
+});
+
+test('validUntilInfo: epoch+days+soon bundle', () => {
+  const now = Date.UTC(2026, 7, 25); // 2026-08-25
+  const info = Logic.validUntilInfo('2026-09-15', now);
+  equal(info.epochMs, Date.UTC(2026, 8, 15));
+  equal(info.days, 21);
+  equal(info.soon, false);
+  equal(Logic.validUntilInfo('2026-08-27', now).soon, true, 'within 7 days');
+  equal(Logic.validUntilInfo('', now), null);
+  equal(Logic.validUntilInfo(null, now), null);
+  equal(Logic.validUntilInfo('garbage', now), null);
+});
+
+test('planLine: provider label wins over entry plan', () => {
+  equal(Logic.planLine({ planLabel: 'Max 5x' }, { plan: 'lite' }), 'Max 5x');
+  equal(Logic.planLine({ planLabel: '' }, { plan: 'lite' }), 'lite');
+  equal(Logic.planLine({}, null), '');
+  equal(Logic.planLine(null, { plan: 'pro' }), 'pro');
+  equal(Logic.planLine(null, null), '');
 });
 
 // ---------------------------------------------------------------------------
@@ -593,6 +684,29 @@ test('severityOf bands 50/75/90', () => {
 test('formatDuration and safeText survive the port', () => {
   equal(Logic.formatDuration(4980000, 'h', 'm'), '1h 23m');
   ok(!Logic.safeText('<img>', 50).includes('<'));
+});
+
+test('safeText: truncates to maxLength and strips control/bidi chars', () => {
+  const noisy = 'a\u0000b\u000bc\u007fd\u202ee\u2066f';
+  equal(Logic.safeText(noisy, 400), 'abcdef');
+  equal(Logic.safeText('x'.repeat(50), 10), 'xxxxxxxxxx');
+});
+
+test('finiteInt: rounds finite, garbage → 0', () => {
+  equal(Logic.finiteInt(42.6), 43);
+  equal(Logic.finiteInt('7'), 7);
+  equal(Logic.finiteInt('x'), 0);
+  equal(Logic.finiteInt(null), 0);
+});
+
+test('kimi: reset_at epoch-seconds scaled, epoch-ms passed through', () => {
+  const seconds = Logic.PROVIDERS.kimi.parse({ main: { data: { window: { used: 4, limit: 10, reset_at: 1787000000 } } } }, 1);
+  const sessionS = Logic.sectionByKey(seconds.entry, 'session');
+  equal(sessionS.resetAt, 1_787_000_000_000, '<1e12 → ×1000');
+
+  const millis = Logic.PROVIDERS.kimi.parse({ main: { data: { window: { used: 4, limit: 10, reset_at: 1787000000123 } } } }, 1);
+  const sessionM = Logic.sectionByKey(millis.entry, 'session');
+  equal(sessionM.resetAt, 1_787_000_000_123, '≥1e12 → kept as ms');
 });
 
 // ---------------------------------------------------------------------------

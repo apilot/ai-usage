@@ -23,6 +23,9 @@ NIconButtonHot {
     if (!pluginApi || !mainInstance || mainInstance.providers.length === 0)
       return pluginApi ? pluginApi.tr("settings.title") : "";
     var label = mainInstance.displayLabel(mainInstance.activeProvider);
+    // surface fetch errors even when a cached entry exists
+    if (mainInstance.activeError !== "")
+      return label + " · ⚠ " + Logic.safeText(mainInstance.activeError, 80);
     if (activeEntry) {
       var h = mainInstance.headlineSection(activeEntry);
       if (h && h.resetAt > 0) {

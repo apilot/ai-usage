@@ -29,8 +29,6 @@
 // Shared utilities
 // ---------------------------------------------------------------------------
 
-var SEVERITIES = ['low', 'mid', 'high', 'critical'];
-
 function severityOf(percent) {
   var p = finitePercent(percent);
   if (p === null)
@@ -118,6 +116,70 @@ function formatMoney(n, currency) {
   if (currency && currency !== '')
     return fixed + ' ' + currency;
   return fixed;
+}
+
+// Remaining-money severity: USD {1,5,20}, non-USD scaled ×7 (CNY {7,35,140}).
+function moneySeverity(remaining, currency) {
+  var r = typeof remaining === 'number' && isFinite(remaining) ? remaining : null;
+  if (r === null)
+    return 'low';
+  var k = currency === 'USD' ? 1 : 7;
+  if (r <= 1 * k)
+    return 'critical';
+  if (r <= 5 * k)
+    return 'high';
+  if (r <= 20 * k)
+    return 'mid';
+  return 'low';
+}
+
+// ---------------------------------------------------------------------------
+// View helpers (shared by Panel / DesktopWidget; formatting stays in QML)
+// ---------------------------------------------------------------------------
+
+// validUntil → {epochMs, days, soon} bundle, or null when unset/unparseable.
+function validUntilInfo(validUntil, nowMs) {
+  if (!validUntil)
+    return null;
+  var days = daysLeft(validUntil, nowMs);
+  if (days === null)
+    return null;
+  return {
+    epochMs: parseValidUntilDate(validUntil),
+    days: days,
+    soon: isExpiringSoon(days)
+  };
+}
+
+// Manual provider label overrides the plan detected from the API response.
+function planLine(provider, entry) {
+  if (provider && provider.planLabel && provider.planLabel !== '')
+    return provider.planLabel;
+  if (entry && entry.plan && entry.plan !== '')
+    return entry.plan;
+  return '';
+}
+
+// Human label for a metric key: known keys stay translated in the views;
+// unknown compound keys (claude per-model: weekly_sonnet, limit_fable)
+// become 'Sonnet weekly', 'Fable limit' — the moved window word stays
+// lowercase, model words are capitalized; single words get capitalized.
+function prettySectionKey(key) {
+  var s = String(key || '');
+  if (s === '')
+    return '';
+  var m = /^(weekly|limit)_(.+)$/.exec(s);
+  if (m)
+    return m[2].split('_').map(cap).filter(nonEmpty).join(' ') + ' ' + m[1];
+  return s.split('_').map(cap).filter(nonEmpty).join(' ');
+}
+
+function cap(w) {
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+
+function nonEmpty(w) {
+  return w !== '';
 }
 
 // ---------------------------------------------------------------------------
@@ -443,7 +505,8 @@ function migrateSettings(settings) {
     showBackground: s.showBackground !== undefined ? s.showBackground : true
   };
   var m = Number(s.refreshMinutes);
-  out.refreshMinutes = isFinite(m) && m >= 1 && m <= 60 ? Math.round(m) : 5;
+  // clamp into 1..60 (out-of-range snaps to the border, garbage → default)
+  out.refreshMinutes = isFinite(m) ? Math.min(60, Math.max(1, Math.round(m))) : 5;
 
   if (Array.isArray(s.providers)) {
     for (var i = 0; i < s.providers.length; i++) {
@@ -453,8 +516,13 @@ function migrateSettings(settings) {
         out.providers.push(p);
     }
     out.activeProviderId = String(s.activeProviderId || '');
-    if (out.activeProviderId === '' && out.providers.length > 0)
-      out.activeProviderId = out.providers[0].id;
+    var alive = false;
+    for (var j = 0; j < out.providers.length; j++) {
+      if (out.providers[j].id === out.activeProviderId)
+        alive = true;
+    }
+    if (!alive)
+      out.activeProviderId = out.providers.length > 0 ? out.providers[0].id : '';
     return out;
   }
 
@@ -479,11 +547,6 @@ function findLimit(limits, type) {
       return limits[i];
   }
   return null;
-}
-
-// Kept as a public v0.2 entry point (tests + Main.qml v0.2 parity).
-function parseQuota(doc, nowMs) {
-  return PROVIDERS.zai.parse({ main: doc }, nowMs);
 }
 
 function parseZai(responses, nowMs) {
@@ -567,16 +630,11 @@ function parseDeepseek(responses, nowMs) {
   if (total === null)
     return { ok: false, error: 'unparseable balance' };
 
-  var thresholds = currency === 'USD' ? { critical: 1, high: 5, mid: 20 } : { critical: 7, high: 35, mid: 140 };
   var severity = 'low';
   if (doc.is_available === false)
     severity = 'critical';
-  else if (total <= thresholds.critical)
-    severity = 'critical';
-  else if (total <= thresholds.high)
-    severity = 'high';
-  else if (total <= thresholds.mid)
-    severity = 'mid';
+  else
+    severity = moneySeverity(total, currency);
 
   var sections = [metric('balance', formatMoney(total, currency), null, '', 0, severity)];
   var granted = parseMoney(info.granted_balance);
@@ -871,10 +929,9 @@ function parseClaudeUsage(doc, nowMs) {
     if (limit !== null) {
       var cur = String(extra.currency || 'USD');
       var remaining = Math.max(0, limit - (used === null ? 0 : used));
-      var sev = remaining <= 1 ? 'critical' : remaining <= 5 ? 'high' : remaining <= 20 ? 'mid' : 'low';
       sections.push(metric('balance', formatMoney(remaining, cur), null,
                            formatMoney(used === null ? 0 : used, cur) + ' / ' + formatMoney(limit, cur),
-                           0, sev));
+                           0, moneySeverity(remaining, cur)));
     }
   }
   if (sections.length === 0)

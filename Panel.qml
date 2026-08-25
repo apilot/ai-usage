@@ -71,37 +71,20 @@ Item {
   // money strings never contain '%' (zai/kimi values do) → no duplication with the ring
   readonly property string heroMoney: hero && hero.value !== "" && String(hero.value).indexOf('%') === -1 ? hero.value : ""
 
-  readonly property string planLine: {
-    if (!currentProvider)
-      return "";
-    if (currentProvider.planLabel && currentProvider.planLabel !== "")
-      return currentProvider.planLabel;
-    if (currentEntry && currentEntry.plan && currentEntry.plan !== "")
-      return currentEntry.plan;
-    return "";
-  }
+  readonly property string planLine: Logic.planLine(currentProvider, currentEntry)
 
   function severityColor(sev) {
-    switch (sev) {
-    case "critical":
-      return Color.mError;
-    case "high":
-      return Color.mSecondary;
-    case "mid":
-      return Color.mPrimary;
-    default:
-      return Color.mTertiary;
-    }
+    return mainInstance ? mainInstance.severityColor(sev) : Color.mTertiary;
   }
 
   readonly property var validInfo: {
     if (!currentProvider || !currentProvider.validUntil)
       return null;
-    var days = Logic.daysLeft(currentProvider.validUntil, now);
-    return days === null ? null : {
-      date: Qt.formatDateTime(new Date(Logic.parseValidUntilDate(currentProvider.validUntil)), "dd.MM"),
-      days: days,
-      soon: Logic.isExpiringSoon(days)
+    var info = Logic.validUntilInfo(currentProvider.validUntil, now);
+    return info === null ? null : {
+      date: Qt.formatDateTime(new Date(info.epochMs), "dd.MM"),
+      days: info.days,
+      soon: info.soon
     };
   }
 
@@ -138,7 +121,7 @@ Item {
       return trFn("panel.weekly_label");
     if (key === "balance")
       return trFn("panel.balance_label");
-    return key;
+    return Logic.prettySectionKey(key);
   }
 
   function blockLabel(key) {
@@ -254,7 +237,8 @@ Item {
             id: tab
             required property var modelData
             readonly property bool active: modelData.id === root.currentId
-            readonly property bool failing: (root.errors[modelData.id] !== undefined && root.errors[modelData.id] !== "") || (root.entries[modelData.id] === undefined && modelData.enabled)
+            // Never-fetched (or throttled) is NOT failing — exclude in-flight fetches.
+            readonly property bool failing: (root.errors[modelData.id] !== undefined && root.errors[modelData.id] !== "") || (root.entries[modelData.id] === undefined && modelData.enabled && root.fetching[modelData.id] !== true)
             readonly property var m: root.mainInstance
 
             Layout.fillWidth: true
@@ -471,7 +455,7 @@ Item {
               Layout.fillWidth: true
               visible: metricCard.modelData.percent !== null && metricCard.modelData.percent !== undefined
               pct: metricCard.modelData.percent || 0
-              severity: metricCard.modelData.severity
+              fillColor: root.severityColor(metricCard.modelData.severity)
             }
 
             NText {

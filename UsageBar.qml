@@ -1,9 +1,9 @@
 // UsageBar.qml — severity-colored usage bar with animated fill.
 //
 // Ported from ai-usagebar (MIT) kde-plasmoid/package/contents/ui/UsageBar.qml
-// to Noctalia's qs.Commons design tokens: Kirigami.Units → Style.*,
-// Kirigami.Theme colors → Color.* severity map (with one amber bridge color
-// for "high", which the Noctalia palette lacks).
+// to Noctalia's qs.Commons design tokens. Policy-free: the caller passes the
+// fill color (mainInstance.severityColor(severity)) — the severity→theme
+// mapping lives in Main.qml, not here.
 import QtQuick
 import qs.Commons
 
@@ -11,23 +11,9 @@ Item {
   id: root
 
   required property int pct
-  property string severity: "low"
+  required property color fillColor
 
   readonly property int clampedPct: Math.max(0, Math.min(100, root.pct))
-
-  // low → mint, mid → yellow (primary), high → amber, critical → error
-  readonly property color severityColor: {
-    switch (root.severity) {
-    case "critical":
-      return Color.mError;
-    case "high":
-      return Color.mSecondary;
-    case "mid":
-      return Color.mPrimary;
-    default:
-      return Color.mTertiary;
-    }
-  }
 
   implicitHeight: 8
   implicitWidth: 120
@@ -43,7 +29,7 @@ Item {
       width: Math.round(parent.width * root.clampedPct / 100)
       height: parent.height
       radius: parent.radius
-      color: root.severityColor
+      color: root.fillColor
 
       // Switching metrics reads as a transition rather than a jump.
       Behavior on width {
