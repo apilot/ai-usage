@@ -7,15 +7,19 @@ on your desktop, in the bar, in the Control Center and in a tabbed detail panel.
 API keys are **encrypted at rest**; the Claude provider needs **no key at all** (reuses
 the `claude` CLI login).
 
-```
-Bar capsule:   (Z) 46% │ (DS) 110.00 CNY │ (OR) $74.50        ← click a segment to switch
-Desktop card:  ┌────────────────────────────┐
-               │ (Z) z.ai · Max 5x     46%  │  ← active provider: chip + plan + remaining
-               │ ▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░  │  ← severity-colored usage bar
-               │ reset 21:07 · in 1h 23m    │  ← live reset countdown
-               │ until 15.09 · 22 d         │  ← optional plan validity
-               └────────────────────────────┘
-```
+## Screenshots
+
+**Bar capsule** — one segment per enabled provider; click a segment to switch and open the panel:
+
+![Bar capsule: Z.ai and DeepSeek segments](media/bar-capsule.png)
+
+**Panel** — tabbed per-provider detail (balance/quota, breakdown, reset countdown, data age):
+
+![Panel card with provider tabs](media/panel.png)
+
+**Settings** — provider CRUD, encrypted keys shown by their last-4 hint:
+
+![Settings: provider list and add/edit form](media/settings.png)
 
 ## Features
 
