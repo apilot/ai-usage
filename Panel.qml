@@ -48,6 +48,15 @@ Item {
   readonly property var currentEntry: entries[currentId] !== undefined ? entries[currentId] : null
   readonly property string currentError: errors[currentId] !== undefined ? errors[currentId] : ""
 
+  // A bar-segment click swaps the ACTIVE provider while this panel is open;
+  // drop a stale local tab selection so the content follows the new active.
+  Connections {
+    target: root.mainInstance
+    function onActiveProviderIdChanged() {
+      root.selectedId = "";
+    }
+  }
+
   readonly property var trFn: pluginApi ? function (key) {
     return pluginApi.tr(key);
   } : null
@@ -77,7 +86,7 @@ Item {
     case "critical":
       return Color.mError;
     case "high":
-      return "#FFB020";
+      return Color.mSecondary;
     case "mid":
       return Color.mPrimary;
     default:
@@ -394,7 +403,7 @@ Item {
               implicitWidth: chipText.implicitWidth + Style.marginS * 2
               implicitHeight: chipText.implicitHeight + Style.marginXS * 2
               radius: height / 2
-              readonly property color c: root.validInfo && root.validInfo.soon ? "#FFB020" : Color.mOnSurfaceVariant
+              readonly property color c: root.validInfo && root.validInfo.soon ? Color.mSecondary : Color.mOnSurfaceVariant
               color: Qt.rgba(c.r, c.g, c.b, 0.10)
               border.width: 1
               border.color: Qt.rgba(c.r, c.g, c.b, 0.45)

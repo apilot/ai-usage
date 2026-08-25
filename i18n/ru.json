@@ -37,18 +37,31 @@
     "providers_label": "ПРОВАЙДЕРЫ",
     "add_provider": {
       "label": "ДОБАВИТЬ ПРОВАЙДЕРА",
+      "button": "Добавить провайдера",
       "action": "Добавить"
+    },
+    "edit_provider": {
+      "label": "РЕДАКТИРОВАТЬ ПРОВАЙДЕРА",
+      "action": "Сохранить"
+    },
+    "form": {
+      "cancel": "Отмена"
     },
     "provider": {
       "type": "Тип провайдера",
       "label_field": "Отображаемое имя (необязательно)",
       "plan_field": "Тарифный план (необязательно)",
-      "valid_until": "Действует до (ГГГГ-ММ-ДД, необязательно)"
+      "valid_until": "Действует до (ГГГГ-ММ-ДД, необязательно)",
+      "cli_login": "логин claude CLI"
     },
     "api_key": {
       "label": "API-ключ",
-      "description": "Ключ API провайдера."
+      "description": "Ключ API провайдера.",
+      "description_edit": "Введите новый ключ, чтобы заменить. Оставьте пустым, чтобы сохранить текущий.",
+      "placeholder_keep": "не изменится",
+      "keyless_hint": "Использует логин claude CLI (~/.claude/.credentials.json). Ключ не нужен."
     },
+    "edit": "Изменить",
     "refresh": {
       "label": "Интервал обновления (минуты)",
       "description": "Как часто опрашивать API (1–60)."

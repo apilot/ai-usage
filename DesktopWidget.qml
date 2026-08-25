@@ -57,7 +57,7 @@ DraggableDesktopWidget {
     case "critical":
       return Color.mError;
     case "high":
-      return "#FFB020";
+      return Color.mSecondary;
     case "mid":
       return Color.mPrimary;
     default:
@@ -231,7 +231,7 @@ DraggableDesktopWidget {
       implicitWidth: untilText.implicitWidth + root.scaledMarginS * 2
       implicitHeight: untilText.implicitHeight + Math.round(2 * root.widgetScale) * 2
       radius: height / 2
-      readonly property color c: root.validInfo && root.validInfo.soon ? "#FFB020" : Color.mOnSurfaceVariant
+      readonly property color c: root.validInfo && root.validInfo.soon ? Color.mSecondary : Color.mOnSurfaceVariant
       color: Qt.rgba(c.r, c.g, c.b, 0.10)
       border.width: Math.max(1, Math.round(root.widgetScale))
       border.color: Qt.rgba(c.r, c.g, c.b, 0.45)

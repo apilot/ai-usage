@@ -37,18 +37,31 @@
     "providers_label": "PROVIDERS",
     "add_provider": {
       "label": "ADD PROVIDER",
+      "button": "Add provider",
       "action": "Add"
+    },
+    "edit_provider": {
+      "label": "EDIT PROVIDER",
+      "action": "Save"
+    },
+    "form": {
+      "cancel": "Cancel"
     },
     "provider": {
       "type": "Provider type",
       "label_field": "Display name (optional)",
       "plan_field": "Plan override (optional)",
-      "valid_until": "Valid until (YYYY-MM-DD, optional)"
+      "valid_until": "Valid until (YYYY-MM-DD, optional)",
+      "cli_login": "claude CLI login"
     },
     "api_key": {
       "label": "API key",
-      "description": "Provider API key."
+      "description": "Provider API key.",
+      "description_edit": "Enter a new key to replace it. Leave empty to keep the stored key.",
+      "placeholder_keep": "unchanged",
+      "keyless_hint": "Uses the claude CLI login (~/.claude/.credentials.json). No key needed."
     },
+    "edit": "Edit",
     "refresh": {
       "label": "Refresh interval (minutes)",
       "description": "How often the usage APIs are polled (1–60)."

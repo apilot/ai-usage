@@ -162,6 +162,262 @@ function newProviderId(type, existingIds) {
   return type + '_' + n;
 }
 
+// Trim the add/edit form fields; an unparsable validUntil is dropped.
+function normalizeProviderForm(fields) {
+  var f = fields || {};
+  function clean(v) {
+    return typeof v === 'string' ? v.trim() : '';
+  }
+  var validUntil = clean(f.validUntil);
+  return {
+    apiKey: clean(f.apiKey),
+    label: clean(f.label),
+    planLabel: clean(f.planLabel),
+    validUntil: parseValidUntilDate(validUntil) === null ? '' : validUntil
+  };
+}
+
+// Edit-mode merge: an empty form key keeps the stored one (an untouched
+// field never erases the key); a non-empty key overwrites it.
+function mergeProviderForm(provider, form) {
+  return {
+    type: form.type,
+    apiKey: form.apiKey === '' ? provider.apiKey : form.apiKey,
+    label: form.label,
+    planLabel: form.planLabel,
+    validUntil: form.validUntil
+  };
+}
+
+// One-glance value for the bar capsule: remaining "%" for window vendors
+// (session first, then weekly), the money string for balance vendors,
+// '' when nothing usable.
+function compactValue(entry) {
+  if (!entry || !entry.sections)
+    return '';
+  var balance = null;
+  for (var i = 0; i < entry.sections.length; i++) {
+    var s = entry.sections[i];
+    if (s.type !== 'metric')
+      continue;
+    if (s.key === 'session' || s.key === 'weekly') {
+      if (s.percent !== null && s.percent !== undefined)
+        return (100 - s.percent) + '%';
+    } else if (s.key === 'balance') {
+      balance = s;
+    }
+  }
+  return balance && balance.value !== '' ? balance.value : '';
+}
+
+// ---------------------------------------------------------------------------
+// API-key envelopes (at-rest encryption, v0.5)
+//
+// Stored format:  enc:v1:<b64url(ciphertext)>:<hmac-hex>:<hint>
+//   blob — openssl enc -aes-256-cbc -pbkdf2 output, base64url
+//   hmac — HMAC-SHA256(passphrase, 'ai-usage-v1|'+blob): tamper detection
+//   hint — last 4 plaintext chars (GitHub-style last-4) so the user can see
+//          WHICH key is stored without decrypting it
+// The plaintext key exists only in a fetch-local variable in Main.qml.
+// ---------------------------------------------------------------------------
+
+var ENV_PREFIX = 'enc:v1:';
+
+function isEncryptedSecret(s) {
+  return typeof s === 'string' && encryptedSecretParts(s) !== null;
+}
+
+function encryptedSecretParts(s) {
+  if (typeof s !== 'string' || s.indexOf(ENV_PREFIX) !== 0)
+    return null;
+  var parts = s.substring(ENV_PREFIX.length).split(':');
+  if (parts.length < 2 || parts.length > 3)
+    return null;
+  for (var i = 0; i < parts.length; i++)
+    if (parts[i] === '')
+      return null;
+  return { version: 'v1', blob: parts[0], hmac: parts[1],
+           hint: parts.length === 3 ? parts[2] : '' };
+}
+
+// Last 4 chars, restricted to key-safe characters; shorter is fine.
+function keyHintOf(plain) {
+  if (typeof plain !== 'string' || plain.length === 0)
+    return '';
+  var tail = plain.substring(plain.length - 4);
+  var out = '';
+  for (var i = 0; i < tail.length; i++)
+    if (/[A-Za-z0-9_-]/.test(tail.charAt(i)))
+      out += tail.charAt(i);
+  return out;
+}
+
+// Public mask: envelope → its stored hint, plaintext → last 4.
+function keyMask(s) {
+  if (typeof s !== 'string' || s.length === 0)
+    return '••••';
+  if (isEncryptedSecret(s)) {
+    var parts = encryptedSecretParts(s);
+    return parts.hint !== '' ? '•••' + parts.hint : '••••';
+  }
+  if (s.length < 4)
+    return '••••';
+  return '•••' + s.substring(s.length - 4);
+}
+
+function buildEnvelope(blob, hmac, hint) {
+  return ENV_PREFIX + blob + ':' + hmac + (hint ? ':' + hint : '');
+}
+
+// The exact string the envelope HMAC covers (domain-separated): the blob
+// AND the displayed hint — everything but the version tag.
+function envelopeHmacMessage(blob, hint) {
+  return 'ai-usage-v1|' + blob + '|' + (hint || '');
+}
+
+// --- sha256 + hmac (pure JS: verified against FIPS/RFC vectors in tests) ---
+
+var B64URL_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+// UTF-8 encode; our envelope inputs are ASCII by construction.
+function strBytes(s) {
+  var out = [];
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    if (c < 0x80)
+      out.push(c);
+    else if (c < 0x800)
+      out.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+    else
+      out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+  }
+  return out;
+}
+
+function bytesToB64url(bytes) {
+  var out = '';
+  for (var i = 0; i < bytes.length; i += 3) {
+    var b0 = bytes[i] & 0xff;
+    var b1 = i + 1 < bytes.length ? bytes[i + 1] & 0xff : 0;
+    var b2 = i + 2 < bytes.length ? bytes[i + 2] & 0xff : 0;
+    out += B64URL_CHARS.charAt(b0 >> 2);
+    out += B64URL_CHARS.charAt(((b0 & 3) << 4) | (b1 >> 4));
+    if (i + 1 < bytes.length)
+      out += B64URL_CHARS.charAt(((b1 & 15) << 2) | (b2 >> 6));
+    if (i + 2 < bytes.length)
+      out += B64URL_CHARS.charAt(b2 & 63);
+  }
+  return out;
+}
+
+function b64urlToBytes(s) {
+  var out = [];
+  for (var i = 0; i < s.length; i += 4) {
+    var n = s.length - i;
+    var c0 = B64URL_CHARS.indexOf(s.charAt(i));
+    var c1 = B64URL_CHARS.indexOf(s.charAt(i + 1));
+    out.push((c0 << 2) | (c1 >> 4));
+    if (n >= 3) {
+      var c2 = B64URL_CHARS.indexOf(s.charAt(i + 2));
+      out.push(((c1 & 15) << 4) | (c2 >> 2));
+      if (n >= 4) {
+        var c3 = B64URL_CHARS.indexOf(s.charAt(i + 3));
+        out.push(((c2 & 3) << 6) | c3);
+      }
+    }
+  }
+  return out;
+}
+
+var SHA256_K = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+];
+
+function sha256Bytes(input) {
+  var msg = input.slice();
+  var bitLen = msg.length * 8;
+  msg.push(0x80);
+  while (msg.length % 64 !== 56)
+    msg.push(0);
+  msg.push(0, 0, 0, 0,
+           (bitLen >>> 24) & 0xff, (bitLen >>> 16) & 0xff,
+           (bitLen >>> 8) & 0xff, bitLen & 0xff);
+
+  var h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+           0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+  var w = new Array(64);
+
+  function rotr(x, n) { return (x >>> n) | (x << (32 - n)); }
+
+  for (var block = 0; block < msg.length; block += 64) {
+    for (var t = 0; t < 16; t++)
+      w[t] = (msg[block + t * 4] << 24) | (msg[block + t * 4 + 1] << 16)
+             | (msg[block + t * 4 + 2] << 8) | msg[block + t * 4 + 3];
+    for (var t2 = 16; t2 < 64; t2++) {
+      var s0 = rotr(w[t2 - 15], 7) ^ rotr(w[t2 - 15], 18) ^ (w[t2 - 15] >>> 3);
+      var s1 = rotr(w[t2 - 2], 17) ^ rotr(w[t2 - 2], 19) ^ (w[t2 - 2] >>> 10);
+      w[t2] = (w[t2 - 16] + s0 + w[t2 - 7] + s1) | 0;
+    }
+    var a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
+    for (var i = 0; i < 64; i++) {
+      var S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      var ch = (e & f) ^ (~e & g);
+      var t1 = (hh + S1 + ch + SHA256_K[i] + w[i]) | 0;
+      var S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      var maj = (a & b) ^ (a & c) ^ (b & c);
+      var t2 = (S0 + maj) | 0;
+      hh = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    h[0] = (h[0] + a) | 0; h[1] = (h[1] + b) | 0; h[2] = (h[2] + c) | 0; h[3] = (h[3] + d) | 0;
+    h[4] = (h[4] + e) | 0; h[5] = (h[5] + f) | 0; h[6] = (h[6] + g) | 0; h[7] = (h[7] + hh) | 0;
+  }
+
+  var out = [];
+  for (var j = 0; j < 8; j++)
+    out.push((h[j] >>> 24) & 0xff, (h[j] >>> 16) & 0xff, (h[j] >>> 8) & 0xff, h[j] & 0xff);
+  return out;
+}
+
+function bytesToHex(bytes) {
+  var s = '';
+  for (var i = 0; i < bytes.length; i++) {
+    var h = (bytes[i] & 0xff).toString(16);
+    s += h.length === 1 ? '0' + h : h;
+  }
+  return s;
+}
+
+function sha256Hex(s) {
+  return bytesToHex(sha256Bytes(strBytes(s)));
+}
+
+function hmacSha256Bytes(key, message) {
+  var keyBytes = strBytes(key);
+  var block = 64;
+  if (keyBytes.length > block)
+    keyBytes = sha256Bytes(keyBytes);
+  while (keyBytes.length < block)
+    keyBytes.push(0);
+  var oKey = [], iKey = [];
+  for (var i = 0; i < block; i++) {
+    oKey.push(keyBytes[i] ^ 0x5c);
+    iKey.push(keyBytes[i] ^ 0x36);
+  }
+  var inner = sha256Bytes(iKey.concat(strBytes(message)));
+  return sha256Bytes(oKey.concat(inner));
+}
+
+function hmacSha256Hex(key, message) {
+  return bytesToHex(hmacSha256Bytes(key, message));
+}
+
 // ---------------------------------------------------------------------------
 // Settings migration (v0.2 single key → v0.3 provider list)
 // ---------------------------------------------------------------------------
@@ -192,7 +448,8 @@ function migrateSettings(settings) {
   if (Array.isArray(s.providers)) {
     for (var i = 0; i < s.providers.length; i++) {
       var p = defaultProviderFields(s.providers[i] || {});
-      if (p.id !== '' && p.apiKey !== '')
+      var keyless = !!PROVIDERS[p.type] && !!PROVIDERS[p.type].keyless;
+      if (p.id !== '' && (p.apiKey !== '' || keyless))
         out.providers.push(p);
     }
     out.activeProviderId = String(s.activeProviderId || '');
@@ -477,6 +734,201 @@ function parseKimi(responses, nowMs) {
 }
 
 // ---------------------------------------------------------------------------
+// Claude adapter (OAuth subscription usage — the same endpoint the `claude`
+// CLI uses; contract cross-checked against ai-usagebar research)
+// ---------------------------------------------------------------------------
+
+var CLAUDE_REFRESH_BUFFER_MS = 300000;
+
+function claudePlanLabel(subscriptionType, rateLimitTier) {
+  var sub = safeText(subscriptionType, 40);
+  if (sub === '')
+    return 'Unknown';
+  sub = sub.charAt(0).toUpperCase() + sub.substring(1);
+  var tier = safeText(rateLimitTier, 60);
+  if (tier.indexOf('20x') >= 0)
+    return sub + ' 20x';
+  if (tier.indexOf('5x') >= 0)
+    return sub + ' 5x';
+  return sub;
+}
+
+function needsClaudeRefresh(creds, nowMs) {
+  if (!creds)
+    return true;
+  var left = Number(creds.expiresAt) - Number(nowMs);
+  return !(isFinite(left) && left >= CLAUDE_REFRESH_BUFFER_MS);
+}
+
+// Pure: returns the NEXT creds object, never mutates the input. The server
+// may rotate the refresh token — a missing one keeps the old (trusted-device
+// flow has no refresh token at all).
+function applyClaudeRefresh(creds, resp, nowMs) {
+  var next = {
+    accessToken: creds.accessToken,
+    refreshToken: creds.refreshToken || '',
+    expiresAt: creds.expiresAt || 0,
+    subscriptionType: creds.subscriptionType || '',
+    rateLimitTier: creds.rateLimitTier || ''
+  };
+  if (!resp)
+    return next;
+  var at = safeText(resp.access_token, 8192);
+  if (at !== '')
+    next.accessToken = at;
+  var rt = safeText(resp.refresh_token, 8192);
+  if (rt !== '')
+    next.refreshToken = rt;
+  var secs = Number(resp.expires_in);
+  if (isFinite(secs) && secs >= 0)
+    next.expiresAt = Math.round(Number(nowMs) + secs * 1000);
+  return next;
+}
+
+function claudeResetAt(v) {
+  if (typeof v === 'number') {
+    if (!isFinite(v) || v <= 0)
+      return 0;
+    return v < 1e12 ? Math.round(v * 1000) : Math.round(v);
+  }
+  if (typeof v === 'string') {
+    var t = Date.parse(v);
+    return isFinite(t) ? Math.round(t) : 0;
+  }
+  return 0;
+}
+
+function claudePercent(v) {
+  var n = Number(v);
+  if (!isFinite(n))
+    return null;
+  n = Math.round(n);
+  return n < 0 ? 0 : n > 100 ? 100 : n;
+}
+
+function claudeApiError(doc) {
+  if (!doc || typeof doc !== 'object')
+    return '';
+  if (doc.error_description)
+    return safeText(doc.error_description, 200);
+  if (doc.error && typeof doc.error === 'object' && doc.error.message)
+    return safeText(doc.error.message, 200);
+  if (typeof doc.error === 'string')
+    return safeText(doc.error, 200);
+  return '';
+}
+
+// doc = parsed body of GET /api/oauth/usage. Percent semantics match our other
+// window vendors (percent = USED), so compactValue shows remaining %.
+function parseClaudeUsage(doc, nowMs) {
+  if (!doc || typeof doc !== 'object')
+    return { ok: false, error: 'empty response' };
+  var apiMsg = claudeApiError(doc);
+  if (apiMsg !== '')
+    return { ok: false, error: apiMsg };
+  var sections = [];
+  var w = doc.five_hour;
+  var p = w ? claudePercent(w.utilization) : null;
+  if (p !== null)
+    sections.push(metric('session', p + '%', p, '', claudeResetAt(w.resets_at), severityOf(p)));
+  w = doc.seven_day;
+  p = w ? claudePercent(w.utilization) : null;
+  if (p !== null)
+    sections.push(metric('weekly', p + '%', p, '', claudeResetAt(w.resets_at), severityOf(p)));
+  // Per-model weekly windows: seven_day_sonnet, seven_day_opus, …
+  for (var key in doc) {
+    if (doc.hasOwnProperty(key) && key.indexOf('seven_day_') === 0 && doc[key]
+        && typeof doc[key] === 'object') {
+      var mp = claudePercent(doc[key].utilization);
+      if (mp !== null) {
+        var model = key.substring('seven_day_'.length);
+        var label = model.charAt(0).toUpperCase() + model.substring(1);
+        sections.push(metric('weekly_' + model, mp + '%', mp, label + ' weekly',
+                             claudeResetAt(doc[key].resets_at), severityOf(mp)));
+      }
+    }
+  }
+  // Named limits (e.g. Fable weekly) carry a model scope.
+  if (Array.isArray(doc.limits)) {
+    for (var i = 0; i < doc.limits.length && i < 16; i++) {
+      var lim = doc.limits[i];
+      if (!lim)
+        continue;
+      var lp = claudePercent(lim.percent);
+      var name = lim.scope && lim.scope.model && lim.scope.model.display_name
+        ? safeText(lim.scope.model.display_name, 40) : '';
+      if (lp !== null && name !== '') {
+        var slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        sections.push(metric('limit_' + slug.substring(0, 24), lp + '%', lp, name,
+                             claudeResetAt(lim.resets_at), severityOf(lp)));
+      }
+    }
+  }
+  var extra = doc.extra_usage;
+  if (extra && extra.is_enabled) {
+    var limit = parseMoney(extra.monthly_limit);
+    var used = parseMoney(extra.used_credits);
+    if (limit !== null) {
+      var cur = String(extra.currency || 'USD');
+      var remaining = Math.max(0, limit - (used === null ? 0 : used));
+      var sev = remaining <= 1 ? 'critical' : remaining <= 5 ? 'high' : remaining <= 20 ? 'mid' : 'low';
+      sections.push(metric('balance', formatMoney(remaining, cur), null,
+                           formatMoney(used === null ? 0 : used, cur) + ' / ' + formatMoney(limit, cur),
+                           0, sev));
+    }
+  }
+  if (sections.length === 0)
+    return { ok: false, error: 'unexpected response shape' };
+  return {
+    ok: true,
+    entry: {
+      id: 'claude',
+      label: 'Claude',
+      plan: '',
+      status: 'ready',
+      error: '',
+      fetchedAt: nowMs,
+      sections: sections
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Anthropic Admin API adapter (documented /v1/organizations/cost_report —
+// month-to-date spend)
+// ---------------------------------------------------------------------------
+
+function parseAnthropicCostReport(doc, nowMs) {
+  var candidates = [];
+  if (doc && Array.isArray(doc.data) && doc.data[0])
+    candidates.push(doc.data[0].amount, doc.data[0].total, doc.data[0].cost);
+  if (doc && typeof doc === 'object')
+    candidates.push(doc.amount, doc.total, doc.cost);
+  for (var i = 0; i < candidates.length; i++) {
+    var node = candidates[i];
+    if (!node || typeof node !== 'object')
+      continue;
+    var value = parseMoney(node.value);
+    if (value === null)
+      continue;
+    var cur = String(node.currency || 'USD');
+    return {
+      ok: true,
+      entry: {
+        id: 'anthropic',
+        label: 'Anthropic',
+        plan: '',
+        status: 'ready',
+        error: '',
+        fetchedAt: nowMs,
+        sections: [metric('balance', formatMoney(value, cur), null, 'month to date', 0, 'low')]
+      }
+    };
+  }
+  return { ok: false, error: 'unparseable cost report' };
+}
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
@@ -541,5 +993,35 @@ var PROVIDERS = {
       }
     }],
     parse: parseKimi
+  },
+  claude: {
+    name: 'Claude',
+    monogram: 'C',
+    color: '#D97757',
+    keyless: true,
+    auth: 'oauth',
+    // XHR cannot set User-Agent (the endpoint 429s without the CLI one), so
+    // Main.qml drives these with curl via runShell — URLs live here as data.
+    usageUrl: 'https://api.anthropic.com/api/oauth/usage',
+    refreshUrl: 'https://platform.claude.com/v1/oauth/token',
+    clientId: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
+    parse: function (responses, nowMs) {
+      return parseClaudeUsage(responses.main, nowMs);
+    }
+  },
+  anthropic: {
+    name: 'Anthropic',
+    monogram: 'A',
+    color: '#CC785C',
+    requests: [{
+      id: 'main',
+      url: 'https://api.anthropic.com/v1/organizations/cost_report',
+      headers: function (key) {
+        return { 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+      }
+    }],
+    parse: function (responses, nowMs) {
+      return parseAnthropicCostReport(responses.main, nowMs);
+    }
   }
 };

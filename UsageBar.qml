@@ -21,7 +21,7 @@ Item {
     case "critical":
       return Color.mError;
     case "high":
-      return "#FFB020";
+      return Color.mSecondary;
     case "mid":
       return Color.mPrimary;
     default:

@@ -45,7 +45,12 @@ function loadLogic() {
     'PROVIDERS', 'parseMoney', 'formatMoney', 'migrateSettings',
     'parseValidUntilDate', 'daysLeft', 'isExpiringSoon', 'newProviderId',
     'severityOf', 'sectionByKey', 'formatDuration', 'remainingMs',
-    'safeText', 'finitePercent',
+    'safeText', 'finitePercent', 'normalizeProviderForm', 'mergeProviderForm', 'compactValue',
+    'isEncryptedSecret', 'encryptedSecretParts', 'keyHintOf', 'keyMask',
+    'buildEnvelope', 'envelopeHmacMessage', 'sha256Hex', 'hmacSha256Hex',
+    'bytesToB64url', 'b64urlToBytes', 'strBytes',
+    'claudePlanLabel', 'needsClaudeRefresh', 'applyClaudeRefresh',
+    'parseClaudeUsage', 'parseAnthropicCostReport',
   ];
   const factory = (0, eval)(`(function(){${src}\n; return {${exportsList.join(',')}};})()`);
   for (const name of exportsList)
@@ -75,24 +80,32 @@ test('registry exposes the 4 v0.3 providers', () => {
     ok(Logic.PROVIDERS[key], `missing provider "${key}"`);
 });
 
-test('each provider has identity + requests + parse', () => {
+test('each provider has identity + transport + parse', () => {
   for (const [key, p] of Object.entries(Logic.PROVIDERS)) {
     equal(typeof p.name, 'string', `${key}.name`);
     ok(p.monogram.length >= 1 && p.monogram.length <= 2, `${key}.monogram 1-2 chars`);
     ok(p.color.startsWith('#'), `${key}.color hex`);
+    equal(typeof p.parse, 'function', `${key}.parse`);
+    // keyless providers (claude) carry URL data for the curl branch instead
+    if (p.keyless) {
+      ok(p.usageUrl.startsWith('https://'), `${key}.usageUrl https`);
+      continue;
+    }
     ok(Array.isArray(p.requests) && p.requests.length >= 1, `${key}.requests`);
     for (const r of p.requests) {
       ok(r.id, `${key}.requests[].id`);
       ok(r.url.startsWith('https://'), `${key}.requests[].url https`);
-      equal(typeof p.parse, 'function', `${key}.parse`);
     }
   }
 });
 
-test('provider requests build Authorization headers from the key', () => {
+test('keyed provider requests build auth headers from the key', () => {
   for (const [, p] of Object.entries(Logic.PROVIDERS)) {
+    if (p.keyless)
+      continue;
     const h = p.requests[0].headers('SECRET_KEY');
-    ok(String(h.Authorization).includes('SECRET_KEY'), `${p.name} carries the key`);
+    const auth = h.Authorization || h['x-api-key'];
+    ok(String(auth).includes('SECRET_KEY'), `${p.name} carries the key`);
   }
 });
 
@@ -260,6 +273,166 @@ test('newProviderId avoids collisions', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Provider form normalization (add/edit dialog v0.4)
+// ---------------------------------------------------------------------------
+
+test('normalizeProviderForm trims every field', () => {
+  const f = Logic.normalizeProviderForm({
+    apiKey: '  sk-123  ', label: ' Work ', planLabel: ' pro ',
+    validUntil: ' 2026-09-15 '
+  });
+  equal(f.apiKey, 'sk-123');
+  equal(f.label, 'Work');
+  equal(f.planLabel, 'pro');
+  equal(f.validUntil, '2026-09-15');
+});
+
+test('normalizeProviderForm drops invalid validUntil', () => {
+  const f = Logic.normalizeProviderForm({ apiKey: 'k', validUntil: '15.09.2026' });
+  equal(f.validUntil, '');
+});
+
+test('normalizeProviderForm survives missing/garbage fields', () => {
+  const f = Logic.normalizeProviderForm({ apiKey: undefined, label: null, planLabel: 42, validUntil: {} });
+  equal(f.apiKey, '');
+  equal(f.label, '');
+  equal(f.planLabel, '');
+  equal(f.validUntil, '');
+});
+
+test('normalizeProviderForm: empty key stays empty', () => {
+  const f = Logic.normalizeProviderForm({ apiKey: '   ' });
+  equal(f.apiKey, '');
+});
+
+test('mergeProviderForm: untouched field keeps the stored key', () => {
+  const m = Logic.mergeProviderForm(
+    { apiKey: 'sk-old', label: 'old' },
+    { type: 'zai', apiKey: '', label: 'new', planLabel: 'pro', validUntil: '' });
+  equal(m.apiKey, 'sk-old', 'empty form key must not erase');
+  equal(m.label, 'new');
+});
+
+test('mergeProviderForm: new key overwrites', () => {
+  const m = Logic.mergeProviderForm(
+    { apiKey: 'sk-old' },
+    { type: 'zai', apiKey: 'sk-new', label: '', planLabel: '', validUntil: '' });
+  equal(m.apiKey, 'sk-new');
+});
+
+// ---------------------------------------------------------------------------
+// Compact bar value (multi-provider capsule v0.4)
+// ---------------------------------------------------------------------------
+
+test('compactValue: window vendors render the remaining percent', () => {
+  const zai = Logic.PROVIDERS.zai.parse({ main: fixture('zai') }, NOW);
+  equal(Logic.compactValue(zai.entry), '46%');
+  const kimi = Logic.PROVIDERS.kimi.parse({ main: fixture('kimi') }, NOW);
+  equal(Logic.compactValue(kimi.entry), '25%');
+});
+
+test('compactValue: money vendors render the balance string', () => {
+  const ds = Logic.PROVIDERS.deepseek.parse({ main: fixture('deepseek_cny') }, NOW);
+  equal(Logic.compactValue(ds.entry), '110.00 CNY');
+  const or_ = Logic.PROVIDERS.openrouter.parse(
+    { credits: fixture('openrouter_credits'), key: fixture('openrouter_key') }, NOW);
+  equal(Logic.compactValue(or_.entry), '$74.50');
+});
+
+test('compactValue: tolerates missing entry/sections', () => {
+  equal(Logic.compactValue(null), '');
+  equal(Logic.compactValue({ sections: null }), '');
+  equal(Logic.compactValue({ sections: [] }), '');
+  equal(Logic.compactValue({ sections: [{ type: 'metric', key: 'balance', value: '', percent: null }] }), '');
+});
+
+// ---------------------------------------------------------------------------
+// API-key envelopes (at-rest encryption, v0.5)
+// ---------------------------------------------------------------------------
+
+test('isEncryptedSecret: envelope prefix + shape', () => {
+  ok(Logic.isEncryptedSecret('enc:v1:QkxPQg:ZODI0Y2Q:abcd'));
+  ok(Logic.isEncryptedSecret('enc:v1:QkxPQg:ZODI0Y2Q')); // hint optional
+  ok(!Logic.isEncryptedSecret('sk-6901234567890'));
+  ok(!Logic.isEncryptedSecret(''));
+  ok(!Logic.isEncryptedSecret(null));
+  ok(!Logic.isEncryptedSecret('enc:v1:'));          // no blob/hmac
+  ok(!Logic.isEncryptedSecret('enc:v2:AAA:BBB'));   // unknown version
+});
+
+test('encryptedSecretParts: full, hint-less, malformed', () => {
+  const full = Logic.encryptedSecretParts('enc:v1:QkxPQg:ZODI0Y2Q:abcd');
+  equal(full.version, 'v1');
+  equal(full.blob, 'QkxPQg');
+  equal(full.hmac, 'ZODI0Y2Q');
+  equal(full.hint, 'abcd');
+  const bare = Logic.encryptedSecretParts('enc:v1:QkxPQg:ZODI0Y2Q');
+  equal(bare.hint, '');
+  equal(Logic.encryptedSecretParts('garbage'), null);
+  equal(Logic.encryptedSecretParts('enc:v1:onlyone'), null);
+});
+
+test('keyHintOf: sanitized last 4', () => {
+  equal(Logic.keyHintOf('sk-1234567890abcd'), 'abcd');
+  equal(Logic.keyHintOf('abc'), 'abc');
+  equal(Logic.keyHintOf('k:89'), 'k89');            // ':' dropped, rest kept
+  equal(Logic.keyHintOf('::::'), '');
+  equal(Logic.keyHintOf(''), '');
+});
+
+test('keyMask: tail preserved for plaintext AND envelopes', () => {
+  equal(Logic.keyMask('sk-1234567890abcd'), '•••abcd');
+  equal(Logic.keyMask('enc:v1:QkxPQg:ZODI0Y2Q:6f2k'), '•••6f2k');
+  equal(Logic.keyMask('enc:v1:QkxPQg:ZODI0Y2Q'), '••••');
+  equal(Logic.keyMask('abc'), '••••');
+  equal(Logic.keyMask(''), '••••');
+  equal(Logic.keyMask(null), '••••');
+});
+
+test('buildEnvelope / envelopeHmacMessage round-trip the format', () => {
+  const env = Logic.buildEnvelope('QkxPQg', 'ZODI0Y2Q', 'abcd');
+  equal(env, 'enc:v1:QkxPQg:ZODI0Y2Q:abcd');
+  const parts = Logic.encryptedSecretParts(env);
+  equal(parts.blob, 'QkxPQg');
+  equal(parts.hmac, 'ZODI0Y2Q');
+  equal(parts.hint, 'abcd');
+  equal(Logic.buildEnvelope('QkxPQg', 'ZODI0Y2Q', ''), 'enc:v1:QkxPQg:ZODI0Y2Q');
+  equal(Logic.envelopeHmacMessage('QkxPQg', 'abcd'), 'ai-usage-v1|QkxPQg|abcd');
+  equal(Logic.envelopeHmacMessage('QkxPQg', ''), 'ai-usage-v1|QkxPQg|');
+});
+
+test('sha256Hex: FIPS 180 vectors', () => {
+  equal(Logic.sha256Hex(''),
+        'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+  equal(Logic.sha256Hex('abc'),
+        'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  equal(Logic.sha256Hex('abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq'),
+        '248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1');
+});
+
+test('hmacSha256Hex: RFC 4231 test cases 1-2', () => {
+  // Case 1: key = 0x0b x20, data = 'Hi There'
+  const k1 = '\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b';
+  equal(Logic.hmacSha256Hex(k1, 'Hi There'),
+        'b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7');
+  // Case 2: key = 'Jefe'
+  equal(Logic.hmacSha256Hex('Jefe', 'what do ya want for nothing?'),
+        '5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843');
+});
+
+test('b64url: vectors and round-trip', () => {
+  equal(Logic.bytesToB64url(Logic.strBytes('abc')), 'YWJj');
+  equal(Logic.bytesToB64url(Logic.strBytes('ab')), 'YWI');
+  equal(Logic.bytesToB64url(Logic.strBytes('a')), 'YQ');
+  const all = [];
+  for (let i = 0; i < 256; i++) all.push(i);
+  const rt = Logic.b64urlToBytes(Logic.bytesToB64url(all));
+  equal(rt.length, 256);
+  ok(rt.every((b, i) => b === i));
+  equal(Logic.bytesToB64url(Logic.b64urlToBytes('QkxPQg')), 'QkxPQg');
+});
+
+// ---------------------------------------------------------------------------
 // Money helpers
 // ---------------------------------------------------------------------------
 
@@ -272,6 +445,137 @@ test('parseMoney: strings and numbers, garbage rejected', () => {
 test('formatMoney: USD symbol prefix, CNY suffix', () => {
   equal(Logic.formatMoney(74.5, 'USD'), '$74.50');
   equal(Logic.formatMoney(110, 'CNY'), '110.00 CNY');
+});
+
+// ---------------------------------------------------------------------------
+// Claude (OAuth subscription usage, contract from ai-usagebar research)
+// ---------------------------------------------------------------------------
+
+test('claudePlanLabel: subscription + rateLimitTier suffix', () => {
+  equal(Logic.claudePlanLabel('max', 'claude_max_5x'), 'Max 5x');
+  equal(Logic.claudePlanLabel('max', 'claude_max_20x'), 'Max 20x');
+  equal(Logic.claudePlanLabel('pro', ''), 'Pro');
+  equal(Logic.claudePlanLabel('team', null), 'Team');
+  equal(Logic.claudePlanLabel('', 'claude_max_5x'), 'Unknown');
+  equal(Logic.claudePlanLabel(undefined, undefined), 'Unknown');
+});
+
+test('needsClaudeRefresh: 300s buffer', () => {
+  const now = 1_000_000;
+  equal(Logic.needsClaudeRefresh({ expiresAt: now + 299_999 }, now), true);
+  equal(Logic.needsClaudeRefresh({ expiresAt: now + 300_000 }, now), false);
+  equal(Logic.needsClaudeRefresh({ expiresAt: now + 3_600_000 }, now), false);
+  equal(Logic.needsClaudeRefresh({}, now), true);
+  equal(Logic.needsClaudeRefresh(null, now), true);
+});
+
+test('applyClaudeRefresh: rotation, expiry, purity', () => {
+  const base = { accessToken: 'a1', refreshToken: 'r1', expiresAt: 1,
+                 subscriptionType: 'max', rateLimitTier: 'claude_max_5x' };
+  const out = Logic.applyClaudeRefresh(base, { access_token: 'a2', refresh_token: 'r2', expires_in: 3600 }, 1000);
+  equal(out.accessToken, 'a2');
+  equal(out.refreshToken, 'r2');
+  equal(out.expiresAt, 1000 + 3_600_000);
+  equal(out.subscriptionType, 'max');
+  equal(base.accessToken, 'a1', 'input creds not mutated');
+
+  const keep = Logic.applyClaudeRefresh(base, { access_token: 'a2', expires_in: 7200.0 }, 2000);
+  equal(keep.refreshToken, 'r1', 'no rotation keeps old refresh token');
+  equal(keep.expiresAt, 2000 + 7_200_000, 'integral float expires_in ok');
+
+  const bad = Logic.applyClaudeRefresh(base, { access_token: 'a2' }, 3000);
+  equal(bad.expiresAt, 1, 'garbage expires_in keeps old expiry');
+});
+
+const CLAUDE_BODY = {
+  five_hour: { utilization: 42.4, resets_at: 1787000000 },
+  seven_day: { utilization: 71, resets_at: '2026-08-28T00:00:00Z' },
+  seven_day_sonnet: { utilization: 15 },
+  limits: [{ kind: 'weekly', percent: 35, resets_at: 1787000000,
+             scope: { model: { display_name: 'Fable' } } }],
+  extra_usage: { is_enabled: true, monthly_limit: 100, used_credits: 23.4, currency: 'USD' }
+};
+
+test('parseClaudeUsage: five_hour session + seven_day weekly, rounded+clamped', () => {
+  const r = Logic.parseClaudeUsage(CLAUDE_BODY, 5000);
+  ok(r.ok);
+  equal(r.entry.id, 'claude');
+  equal(r.entry.plan, '');
+  const session = Logic.sectionByKey(r.entry, 'session');
+  equal(session.value, '42%');
+  equal(session.percent, 42);
+  equal(session.resetAt, 1_787_000_000_000, 'epoch seconds scaled to ms');
+  const weekly = Logic.sectionByKey(r.entry, 'weekly');
+  equal(weekly.value, '71%');
+  equal(weekly.resetAt, Date.parse('2026-08-28T00:00:00Z'), 'ISO resets_at parsed');
+});
+
+test('parseClaudeUsage: clamps utilization outside 0..100', () => {
+  const r = Logic.parseClaudeUsage({ five_hour: { utilization: 105 }, seven_day: { utilization: -3 } }, 1);
+  ok(r.ok);
+  equal(Logic.sectionByKey(r.entry, 'session').percent, 100);
+  equal(Logic.sectionByKey(r.entry, 'weekly').percent, 0);
+});
+
+test('parseClaudeUsage: per-model weekly + extra usage balance', () => {
+  const r = Logic.parseClaudeUsage(CLAUDE_BODY, 5000);
+  const model = r.entry.sections.find((s) => s.type === 'metric' && s.key !== 'session'
+    && s.key !== 'weekly' && s.key !== 'balance');
+  ok(model, 'has a per-model metric');
+  equal(model.value, '15%');
+  ok(model.detail.indexOf('Sonnet') >= 0, 'sonnet window labelled');
+  const balance = Logic.sectionByKey(r.entry, 'balance');
+  equal(balance.value, '$76.60', 'monthly_limit - used_credits remaining');
+});
+
+test('parseClaudeUsage: garbage body rejected', () => {
+  equal(Logic.parseClaudeUsage({}, 1).ok, false);
+  equal(Logic.parseClaudeUsage(null, 1).ok, false);
+  equal(Logic.parseClaudeUsage('nope', 1).ok, false);
+});
+
+test('parseClaudeUsage: compactValue shows remaining session %', () => {
+  const r = Logic.parseClaudeUsage(CLAUDE_BODY, 5000);
+  equal(Logic.compactValue(r.entry), '58%');
+});
+
+// ---------------------------------------------------------------------------
+// Anthropic Admin API (cost_report, documented)
+// ---------------------------------------------------------------------------
+
+test('parseAnthropicCostReport: month-to-date spend from data[].amount', () => {
+  const r = Logic.parseAnthropicCostReport({ data: [{ amount: { value: 23.45, currency: 'USD' } }] }, 1000);
+  ok(r.ok);
+  equal(r.entry.id, 'anthropic');
+  const balance = Logic.sectionByKey(r.entry, 'balance');
+  equal(balance.value, '$23.45');
+  equal(balance.percent, null);
+});
+
+test('parseAnthropicCostReport: tolerant amount locations', () => {
+  ok(Logic.parseAnthropicCostReport({ amount: { value: 8, currency: 'USD' } }, 1).ok);
+  ok(Logic.parseAnthropicCostReport({ total: { value: 8 } }, 1).ok);
+  equal(Logic.parseAnthropicCostReport({ data: [] }, 1).ok, false);
+  equal(Logic.parseAnthropicCostReport({}, 1).ok, false);
+  equal(Logic.parseAnthropicCostReport(null, 1).ok, false);
+});
+
+test('PROVIDERS registry: claude keyless-oauth, anthropic api-key', () => {
+  ok(Logic.PROVIDERS.claude);
+  equal(Logic.PROVIDERS.claude.name, 'Claude');
+  equal(Logic.PROVIDERS.claude.monogram, 'C');
+  equal(Logic.PROVIDERS.claude.keyless, true);
+  ok(Logic.PROVIDERS.claude.usageUrl.indexOf('api.anthropic.com/api/oauth/usage') > 0);
+  ok(Logic.PROVIDERS.claude.refreshUrl.indexOf('platform.claude.com/v1/oauth/token') > 0);
+  equal(typeof Logic.PROVIDERS.claude.parse, 'function');
+
+  ok(Logic.PROVIDERS.anthropic);
+  equal(Logic.PROVIDERS.anthropic.name, 'Anthropic');
+  equal(Logic.PROVIDERS.anthropic.monogram, 'A');
+  ok(Array.isArray(Logic.PROVIDERS.anthropic.requests));
+  const h = Logic.PROVIDERS.anthropic.requests[0].headers('sk-ant-admin01');
+  equal(h['x-api-key'], 'sk-ant-admin01');
+  equal(h['anthropic-version'], '2023-06-01');
 });
 
 // ---------------------------------------------------------------------------
