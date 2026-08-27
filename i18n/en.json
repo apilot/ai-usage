@@ -9,7 +9,9 @@
     "no_providers": "No providers",
     "add_provider_hint": "click → settings",
     "error": "fetch failed",
-    "loading": "…"
+    "loading": "…",
+    "peak_on": "peak ({note}) · ends in {duration}",
+    "peak_off": "off-peak ({note}) · peak in {duration}"
   },
   "panel": {
     "header": "AI Usage",
@@ -30,7 +32,15 @@
     "cached": " · cached",
     "no_data": "No data yet.",
     "no_key": "API key is not configured for this provider.",
-    "no_providers": "No providers configured. Add one in the plugin settings."
+    "no_providers": "No providers configured. Add one in the plugin settings.",
+    "peak_title": "Peak hours",
+    "peak_now": "peak now — {note}",
+    "peak_off": "off-peak — {note}",
+    "peak_until_start": "starts in {duration}",
+    "peak_until_end": "ends in {duration}",
+    "peak_window": "{start} ({startP}) – {end} ({endP})",
+    "peak_schedule": "schedule: {days}{local} ({provider})",
+    "peak_days": "Mon–Fri"
   },
   "settings": {
     "title": "AI Usage",

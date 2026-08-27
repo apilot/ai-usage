@@ -1,7 +1,7 @@
 {
   "id": "ai-usage",
   "name": "AI Usage",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "minNoctaliaVersion": "3.7.1",
   "author": "apilot",
   "license": "MIT",
