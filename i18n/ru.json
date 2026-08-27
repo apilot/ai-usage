@@ -9,7 +9,9 @@
     "no_providers": "Нет провайдеров",
     "add_provider_hint": "клик → настройки",
     "error": "ошибка запроса",
-    "loading": "…"
+    "loading": "…",
+    "peak_on": "пик ({note}) · до конца {duration}",
+    "peak_off": "вне пика ({note}) · до пика {duration}"
   },
   "panel": {
     "header": "AI Usage",
@@ -30,7 +32,15 @@
     "cached": " · кэш",
     "no_data": "Данных пока нет.",
     "no_key": "Для этого провайдера не настроен API-ключ.",
-    "no_providers": "Провайдеры не настроены. Добавьте их в настройках плагина."
+    "no_providers": "Провайдеры не настроены. Добавьте их в настройках плагина.",
+    "peak_title": "Пиковые часы",
+    "peak_now": "сейчас пик — {note}",
+    "peak_off": "вне пика — {note}",
+    "peak_until_start": "до начала {duration}",
+    "peak_until_end": "до конца {duration}",
+    "peak_window": "{start} ({startP}) – {end} ({endP})",
+    "peak_schedule": "расписание: {days}{local} ({provider})",
+    "peak_days": "пн–пт"
   },
   "settings": {
     "title": "AI Usage",

@@ -88,6 +88,18 @@ Item {
     };
   }
 
+  // Time-of-day pricing state of the shown provider (null → no peak card).
+  readonly property var peakInfo: {
+    if (!currentProvider)
+      return null;
+    return Logic.peakStatus(currentProvider.type, now);
+  }
+
+  // The peak window the countdown refers to: running one, or the next one.
+  readonly property var peakWindow: peakInfo !== null
+    ? (peakInfo.current !== null ? peakInfo.current : peakInfo.next)
+    : null
+
   // Sections of the current entry, split by render type (hero excluded).
   readonly property var metricSections: {
     var out = [];
@@ -164,6 +176,53 @@ Item {
     if (currentError !== "")
       text += trFn("panel.cached");
     return text;
+  }
+
+  // --- peak-hours formatting ------------------------------------------------
+
+  function peakStatusLine() {
+    if (!trFn || !peakInfo)
+      return "";
+    var note = peakInfo.inPeak ? peakInfo.peakNote : peakInfo.offPeakNote;
+    var head = trFn(peakInfo.inPeak ? "panel.peak_now" : "panel.peak_off").replace("{note}", note);
+    var dur = Logic.formatDuration(Logic.remainingMs(peakInfo.transitionAt, now), hUnit, mUnit);
+    var tail = trFn(peakInfo.inPeak ? "panel.peak_until_end" : "panel.peak_until_start").replace("{duration}", dur);
+    return head + "  ·  " + tail;
+  }
+
+  // "пн 09:00 (14:00 UTC+8) – 13:00 (18:00 UTC+8)": local wall time first,
+  // the provider's native clock in parens; weekday rides on the start bound.
+  function peakWindowLine() {
+    if (!trFn || !peakWindow)
+      return "";
+    var s = peakWindow;
+    var startLocal = Qt.formatDateTime(new Date(s.startMs), "ddd HH:mm");
+    var sameLocalDay = new Date(s.startMs).toDateString() === new Date(s.endMs).toDateString();
+    var endLocal = Qt.formatDateTime(new Date(s.endMs), sameLocalDay ? "HH:mm" : "ddd HH:mm");
+    return trFn("panel.peak_window")
+      .replace("{start}", startLocal)
+      .replace("{startP}", Logic.hmFromMinutes(s.startMin) + " " + peakInfo.tzLabel)
+      .replace("{end}", endLocal)
+      .replace("{endP}", Logic.hmFromMinutes(s.endMin) + " " + peakInfo.tzLabel);
+  }
+
+  // Daily schedule: local conversions first, provider definition in parens.
+  function peakScheduleLine() {
+    if (!trFn || !peakInfo)
+      return "";
+    var local = [];
+    var prov = [];
+    for (var i = 0; i < peakInfo.scheduleWindows.length; i++) {
+      var w = peakInfo.scheduleWindows[i];
+      local.push(Qt.formatDateTime(new Date(w.startMs), "HH:mm") + "–"
+                 + Qt.formatDateTime(new Date(w.endMs), "HH:mm"));
+      prov.push(Logic.hmFromMinutes(w.startMin) + "–" + Logic.hmFromMinutes(w.endMin));
+    }
+    var days = peakInfo.weekdaysOnly ? trFn("panel.peak_days") + " " : "";
+    return trFn("panel.peak_schedule")
+      .replace("{days}", days)
+      .replace("{local}", local.join(", "))
+      .replace("{provider}", prov.join(", ") + " " + peakInfo.tzLabel);
   }
 
   Rectangle {
@@ -548,6 +607,56 @@ Item {
                 elide: Text.ElideRight
               }
             }
+          }
+        }
+      }
+
+      // --- peak-hours card (time-of-day pricing: z.ai, DeepSeek) ------------
+      NBox {
+        Layout.fillWidth: true
+        visible: root.peakInfo !== null
+        implicitHeight: peakCol.implicitHeight + Style.marginM * 2
+
+        ColumnLayout {
+          id: peakCol
+          anchors.fill: parent
+          anchors.margins: Style.marginM
+          spacing: Style.marginXS
+
+          NText {
+            Layout.fillWidth: true
+            text: root.trFn ? root.trFn("panel.peak_title") : ""
+            color: Color.mOnSurfaceVariant
+            pointSize: Style.fontSizeXS
+            font.capitalization: Font.AllUppercase
+          }
+
+          NText {
+            Layout.fillWidth: true
+            text: root.peakStatusLine()
+            color: root.peakInfo && root.peakInfo.inPeak ? Color.mSecondary : Color.mOnSurface
+            pointSize: Style.fontSizeM
+            font.bold: true
+            elide: Text.ElideRight
+          }
+
+          NText {
+            Layout.fillWidth: true
+            visible: text !== ""
+            text: root.peakWindowLine()
+            color: Color.mOnSurfaceVariant
+            pointSize: Style.fontSizeS
+            elide: Text.ElideRight
+          }
+
+          NText {
+            Layout.fillWidth: true
+            visible: text !== ""
+            text: root.peakScheduleLine()
+            color: Color.mOnSurfaceVariant
+            pointSize: Style.fontSizeXS
+            opacity: 0.8
+            elide: Text.ElideRight
           }
         }
       }

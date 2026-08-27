@@ -59,6 +59,11 @@ DraggableDesktopWidget {
     };
   }
 
+  // Time-of-day pricing state (z.ai, DeepSeek); null → no peak line.
+  readonly property var peakInfo: mainInstance && activeProvider
+    ? Logic.peakStatus(activeProvider.type, now)
+    : null
+
   readonly property string valueLine: {
     if (!trFn)
       return "";
@@ -203,6 +208,23 @@ DraggableDesktopWidget {
         return root.trFn("desktop_widget.reset_in").replace("{duration}", dur) + " · " + root.trFn("desktop_widget.reset_at").replace("{time}", time);
       }
       color: Color.mOnSurfaceVariant
+      pointSize: root.scaledFontSizeS
+      elide: Text.ElideRight
+    }
+
+    // --- peak-hours line (time-of-day pricing) ----------------------------------
+    NText {
+      Layout.fillWidth: true
+      visible: text !== "" && root.peakInfo !== null
+      text: {
+        if (!root.trFn || !root.peakInfo)
+          return "";
+        var note = root.peakInfo.inPeak ? root.peakInfo.peakNote : root.peakInfo.offPeakNote;
+        var dur = Logic.formatDuration(Logic.remainingMs(root.peakInfo.transitionAt, now), hUnit, mUnit);
+        var key = root.peakInfo.inPeak ? "desktop_widget.peak_on" : "desktop_widget.peak_off";
+        return root.trFn(key).replace("{note}", note).replace("{duration}", dur);
+      }
+      color: root.peakInfo && root.peakInfo.inPeak ? Color.mSecondary : Color.mOnSurfaceVariant
       pointSize: root.scaledFontSizeS
       elide: Text.ElideRight
     }

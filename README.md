@@ -1,6 +1,6 @@
 # AI Usage — multi-provider AI quota monitor for Noctalia Shell
 
-![Noctalia](https://img.shields.io/badge/Noctalia-Shell-7c7cf0) ![QML](https://img.shields.io/badge/QML-Quickshell-blue) ![Tests](https://img.shields.io/badge/tests-62%20pass-brightgreen) ![License](https://img.shields.io/badge/license-MIT-green) ![Version](https://img.shields.io/badge/version-0.5.1-orange)
+![Noctalia](https://img.shields.io/badge/Noctalia-Shell-7c7cf0) ![QML](https://img.shields.io/badge/QML-Quickshell-blue) ![Tests](https://img.shields.io/badge/tests-78%20pass-brightgreen) ![License](https://img.shields.io/badge/license-MIT-green) ![Version](https://img.shields.io/badge/version-0.6.0-orange)
 
 Quotas, balances, reset countdowns and plan validity for **six AI providers in one card** —
 on your desktop, in the bar, in the Control Center and in a tabbed detail panel.
@@ -29,6 +29,11 @@ the `claude` CLI login).
 - **Panel** with per-provider tabs: session/weekly windows, per-model limits, balances,
   per-tool breakdown, reset timestamps and "cached" annotations
 - **Reset countdowns** in your local timezone; severity colors (low → mid → high → critical)
+- **Peak-hour awareness** (z.ai, DeepSeek): the panel shows the peak window in your local
+  time with the provider's native clock in parens (`пн 09:00 (14:00 UTC+8) – 13:00 (18:00 UTC+8)`),
+  a live countdown to the next transition (peak start or end), and the full weekday schedule;
+  the desktop widget carries a compact one-liner. Weekends are always off-peak; public
+  holidays falling on weekdays are **not** discounted by these vendors and stay peak.
 - **Plan validity dates** — set `valid until` and the card warns when ≤ 7 days remain
 - **Encrypted key storage** — AES-256-CBC + PBKDF2 (600k iterations), machine-bound;
   integrity-checked with HMAC-SHA256; decrypted only at request time
@@ -40,8 +45,8 @@ the `claude` CLI login).
 
 | Provider | Auth | Shows | Endpoint |
 |---|---|---|---|
-| **z.ai** | API key | 5h session window %, weekly quota, per-tool (MCP) usage | `api.z.ai` · undocumented |
-| **DeepSeek** | API key | balance, granted/topped-up breakdown, USD/CNY | `api.deepseek.com` · documented |
+| **z.ai** | API key | 5h session window %, weekly quota, per-tool (MCP) usage, peak hours (×3 Mon–Fri 14:00–18:00 UTC+8) | `api.z.ai` · undocumented |
+| **DeepSeek** | API key | balance, granted/topped-up breakdown, USD/CNY, peak hours (Mon–Fri 01:00–04:00 & 06:00–10:00 UTC; off-peak = 50%) | `api.deepseek.com` · documented |
 | **OpenRouter** | API key | credits balance, consumption %, key meta (label, limits) | `openrouter.ai` · documented |
 | **Kimi** | API key | session window + weekly quota | `api.kimi.com` · community-confirmed |
 | **Claude** | `claude` CLI login | 5h/7d windows, per-model limits (e.g. *Sonnet weekly*), extra-usage $ balance, plan label (e.g. *Max 5x*) | `api.anthropic.com` · used by official CLI |
@@ -133,7 +138,7 @@ Logic.js               pure data layer — parsers, migration, crypto primitives
 Main.qml               service: fetch/XHR/curl, encryption, provider state
 BarWidget/Panel/DesktopWidget/ControlCenterWidget/Settings.qml + UsageBar, ProviderChip
 i18n/{en,ru}.json
-tests/logic.test.mjs   62 unit tests (node, zero deps) — includes FIPS/RFC crypto vectors
+tests/logic.test.mjs   78 unit tests (node, zero deps) — includes FIPS/RFC crypto vectors
 tests/bench/           offline QML smoke harness: stubs the design system and
                        instantiates all 6 entry points; run from the repo root:
                        env QT_QPA_PLATFORM=offscreen timeout 25 qs -p tests/bench

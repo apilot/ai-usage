@@ -28,7 +28,7 @@ function test(name, fn) {
 }
 
 import { strict as assert } from 'node:assert';
-const { equal, ok, notEqual } = assert;
+const { equal, ok, notEqual, deepEqual } = assert;
 
 function fixture(name) {
   return JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8'));
@@ -52,6 +52,7 @@ function loadLogic() {
     'claudePlanLabel', 'needsClaudeRefresh', 'applyClaudeRefresh',
     'parseClaudeUsage', 'parseAnthropicCostReport',
     'moneySeverity', 'validUntilInfo', 'planLine', 'prettySectionKey',
+    'peakStatus', 'hmFromMinutes',
   ];
   const factory = (0, eval)(`(function(){${src}\n; return {${exportsList.join(',')}};})()`);
   for (const name of exportsList)
@@ -707,6 +708,144 @@ test('kimi: reset_at epoch-seconds scaled, epoch-ms passed through', () => {
   const millis = Logic.PROVIDERS.kimi.parse({ main: { data: { window: { used: 4, limit: 10, reset_at: 1787000000123 } } } }, 1);
   const sessionM = Logic.sectionByKey(millis.entry, 'session');
   equal(sessionM.resetAt, 1_787_000_000_123, '≥1e12 → kept as ms');
+});
+
+// ---------------------------------------------------------------------------
+// Peak-hour schedules (time-of-day pricing; z.ai + DeepSeek)
+// Fixed clock base: NOW = Mon 2026-08-24T12:00:00Z.
+// z.ai peak  = Mon–Fri 14:00–18:00 SGT (UTC+8) → 06:00–10:00 UTC, ×3 / ×1.
+// DeepSeek   = Mon–Fri 01:00–04:00 + 06:00–10:00 UTC, ×1 / ×0.5.
+// ---------------------------------------------------------------------------
+
+test('hmFromMinutes: HH:MM clock strings', () => {
+  equal(Logic.hmFromMinutes(0), '00:00');
+  equal(Logic.hmFromMinutes(60), '01:00');
+  equal(Logic.hmFromMinutes(840), '14:00');
+  equal(Logic.hmFromMinutes(1439), '23:59');
+});
+
+test('peak schedules: only zai and deepseek carry peak data', () => {
+  const z = Logic.PROVIDERS.zai.peak;
+  equal(z.tzOffsetMin, 480);
+  equal(z.tzLabel, 'UTC+8');
+  equal(z.weekdaysOnly, true);
+  equal(z.peakNote, '×3');
+  equal(z.offPeakNote, '×1');
+  deepEqual(z.windows, [{ startMin: 840, endMin: 1080 }]);
+
+  const d = Logic.PROVIDERS.deepseek.peak;
+  equal(d.tzOffsetMin, 0);
+  equal(d.tzLabel, 'UTC');
+  deepEqual(d.windows, [{ startMin: 60, endMin: 240 }, { startMin: 360, endMin: 600 }]);
+  equal(d.peakNote, '×1');
+  equal(d.offPeakNote, '×0.5');
+
+  for (const t of ['openrouter', 'kimi', 'claude', 'anthropic'])
+    equal(Logic.PROVIDERS[t].peak, undefined, `${t} has no peak`);
+});
+
+test('peakStatus: null for unknown providers and providers without a schedule', () => {
+  equal(Logic.peakStatus('openrouter', NOW), null);
+  equal(Logic.peakStatus('no-such-type', NOW), null);
+});
+
+test('zai: Monday evening UTC is off-peak, next peak Tuesday 06:00Z', () => {
+  const r = Logic.peakStatus('zai', Date.UTC(2026, 7, 24, 12, 0, 0));
+  equal(r.inPeak, false);
+  equal(r.current, null);
+  equal(r.next.startMs, Date.UTC(2026, 7, 25, 6, 0, 0));
+  equal(r.next.endMs, Date.UTC(2026, 7, 25, 10, 0, 0));
+  equal(r.transitionAt, Date.UTC(2026, 7, 25, 6, 0, 0));
+});
+
+test('zai: inside the Monday peak window', () => {
+  const r = Logic.peakStatus('zai', Date.UTC(2026, 7, 24, 7, 0, 0)); // 15:00 SGT
+  equal(r.inPeak, true);
+  equal(r.current.startMs, Date.UTC(2026, 7, 24, 6, 0, 0));
+  equal(r.current.endMs, Date.UTC(2026, 7, 24, 10, 0, 0));
+  equal(r.transitionAt, Date.UTC(2026, 7, 24, 10, 0, 0));
+  equal(r.next, null);
+});
+
+test('zai: window boundaries — start inclusive, end exclusive', () => {
+  equal(Logic.peakStatus('zai', Date.UTC(2026, 7, 24, 6, 0, 0)).inPeak, true);
+  const after = Logic.peakStatus('zai', Date.UTC(2026, 7, 24, 10, 0, 0));
+  equal(after.inPeak, false);
+  equal(after.next.startMs, Date.UTC(2026, 7, 25, 6, 0, 0));
+});
+
+test('zai: Friday after peak skips the weekend → Monday', () => {
+  const r = Logic.peakStatus('zai', Date.UTC(2026, 7, 28, 12, 0, 0));
+  equal(r.inPeak, false);
+  equal(r.next.startMs, Date.UTC(2026, 7, 31, 6, 0, 0)); // Monday
+});
+
+test('zai: Saturday inside would-be peak clock stays off-peak', () => {
+  const r = Logic.peakStatus('zai', Date.UTC(2026, 7, 29, 7, 0, 0)); // Sat 15:00 SGT
+  equal(r.inPeak, false);
+  equal(r.next.startMs, Date.UTC(2026, 7, 31, 6, 0, 0));
+});
+
+test('zai: scheduleWindows describes the reference day in provider-local minutes', () => {
+  const r = Logic.peakStatus('zai', Date.UTC(2026, 7, 24, 12, 0, 0));
+  equal(r.scheduleWindows.length, 1);
+  equal(r.scheduleWindows[0].startMin, 840);
+  equal(r.scheduleWindows[0].endMin, 1080);
+  equal(r.scheduleWindows[0].startMs, Date.UTC(2026, 7, 25, 6, 0, 0));
+});
+
+test('deepseek: inside the first window, ends 04:00Z', () => {
+  const r = Logic.peakStatus('deepseek', Date.UTC(2026, 7, 26, 2, 0, 0)); // Wed
+  equal(r.inPeak, true);
+  equal(r.transitionAt, Date.UTC(2026, 7, 26, 4, 0, 0));
+});
+
+test('deepseek: between the two windows, next starts 06:00Z', () => {
+  const r = Logic.peakStatus('deepseek', Date.UTC(2026, 7, 26, 5, 0, 0));
+  equal(r.inPeak, false);
+  equal(r.next.startMs, Date.UTC(2026, 7, 26, 6, 0, 0));
+});
+
+test('deepseek: inside the second window, ends 10:00Z', () => {
+  const r = Logic.peakStatus('deepseek', Date.UTC(2026, 7, 26, 7, 30, 0));
+  equal(r.inPeak, true);
+  equal(r.transitionAt, Date.UTC(2026, 7, 26, 10, 0, 0));
+});
+
+test('deepseek: Sunday 23:30Z rolls over to Monday 01:00Z', () => {
+  const r = Logic.peakStatus('deepseek', Date.UTC(2026, 7, 30, 23, 30, 0));
+  equal(r.inPeak, false);
+  equal(r.next.startMs, Date.UTC(2026, 7, 31, 1, 0, 0));
+});
+
+test('deepseek: Saturday peak clock is off-peak, next is Monday 01:00Z', () => {
+  const r = Logic.peakStatus('deepseek', Date.UTC(2026, 7, 29, 2, 0, 0));
+  equal(r.inPeak, false);
+  equal(r.next.startMs, Date.UTC(2026, 7, 31, 1, 0, 0));
+});
+
+test('deepseek: scheduleWindows lists both windows of the reference day', () => {
+  const r = Logic.peakStatus('deepseek', Date.UTC(2026, 7, 26, 5, 0, 0));
+  equal(r.scheduleWindows.length, 2);
+  equal(r.scheduleWindows[0].startMs, Date.UTC(2026, 7, 26, 1, 0, 0));
+  equal(r.scheduleWindows[1].startMs, Date.UTC(2026, 7, 26, 6, 0, 0));
+});
+
+test('peak windows may wrap past provider-local midnight (keyed to start day)', () => {
+  Logic.PROVIDERS.wraptest = {
+    name: 'Wrap',
+    peak: { tzOffsetMin: 0, tzLabel: 'UTC', weekdaysOnly: true,
+            windows: [{ startMin: 1320, endMin: 300 }], peakNote: '×2', offPeakNote: '×1' }
+  };
+  const mon = Logic.peakStatus('wraptest', Date.UTC(2026, 7, 24, 23, 0, 0));
+  equal(mon.inPeak, true); // 22:00 Mon is inside 22:00→05:00
+  equal(mon.transitionAt, Date.UTC(2026, 7, 25, 5, 0, 0));
+  // Start Friday 22:00 (weekday) → window still applies into Saturday.
+  const fri = Logic.peakStatus('wraptest', Date.UTC(2026, 7, 28, 23, 30, 0));
+  equal(fri.inPeak, true);
+  equal(fri.transitionAt, Date.UTC(2026, 7, 29, 5, 0, 0));
+  // Sunday has no window start; Saturday 23:00 belongs to Sat (weekend) → no.
+  equal(Logic.peakStatus('wraptest', Date.UTC(2026, 7, 29, 23, 0, 0)).inPeak, false);
 });
 
 // ---------------------------------------------------------------------------

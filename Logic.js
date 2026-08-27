@@ -986,6 +986,117 @@ function parseAnthropicCostReport(doc, nowMs) {
 }
 
 // ---------------------------------------------------------------------------
+// Peak-hour schedules (time-of-day pricing)
+//
+// Provider schedule data (verified against the official docs pages):
+//   z.ai      Mon–Fri 14:00–18:00 SGT (UTC+8); GLM flagship burns quota ×3
+//             in peak, ×1 off-peak; weekends are off-peak all day.
+//   DeepSeek  Mon–Fri 01:00–04:00 and 06:00–10:00 UTC; off-peak is half the
+//             peak price; weekends are off-peak all day.
+// Neither vendor discounts public holidays falling on weekdays — no holiday
+// calendar exists in their APIs, so the schedule models weekdays only.
+//
+// Both provider zones are fixed-offset (UTC, UTC+8) — no DST, so wall-clock
+// math with a constant offset is exact. The user's local display side keeps
+// DST correctness by rendering via Date + local timezone in QML.
+// ---------------------------------------------------------------------------
+
+// Minutes-of-day → 'HH:MM' clock string (wraps past 24h into the next day).
+function hmFromMinutes(min) {
+  var m = ((finiteInt(min) % 1440) + 1440) % 1440;
+  var h = Math.floor(m / 60);
+  var mm = m % 60;
+  return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm;
+}
+
+// Provider-local day index (days since epoch on the provider's wall clock).
+function peakLocalDay(ms, tzOffsetMin) {
+  return Math.floor((ms + tzOffsetMin * 60000) / 86400000);
+}
+
+// Window occurrences of one provider-local day. The weekday filter keys to
+// the window START day; a wrapping window (endMin ≤ startMin) runs into the
+// next calendar day. endMin is normalized past 1440 for endMs math; use
+// hmFromMinutes for display (it wraps modulo 24h).
+function peakWindowsOnDay(peak, dayIndex) {
+  if (peak.weekdaysOnly) {
+    var dow = new Date(dayIndex * 86400000).getUTCDay();
+    if (dow === 0 || dow === 6)
+      return [];
+  }
+  var dayStart = dayIndex * 86400000 - peak.tzOffsetMin * 60000;
+  var out = [];
+  for (var i = 0; i < peak.windows.length; i++) {
+    var startMin = finiteInt(peak.windows[i].startMin);
+    var endMin = finiteInt(peak.windows[i].endMin);
+    if (endMin <= startMin)
+      endMin += 1440;
+    out.push({
+      day: dayIndex,
+      startMin: startMin,
+      endMin: endMin,
+      startMs: dayStart + startMin * 60000,
+      endMs: dayStart + endMin * 60000
+    });
+  }
+  return out;
+}
+
+// Time-of-day pricing state for a configured provider type, or null when the
+// vendor has no peak schedule. Contract:
+//   { inPeak, tzOffsetMin, tzLabel, weekdaysOnly, peakNote, offPeakNote,
+//     current: {startMs, endMs, ...} | null,   — active window (inPeak only)
+//     next:    {startMs, endMs, ...} | null,   — upcoming window (off-peak)
+//     transitionAt,                             — current.endMs / next.startMs
+//     scheduleWindows: [...] }                  — the reference day's windows
+function peakStatus(providerType, nowMs) {
+  var adapter = PROVIDERS[providerType];
+  var peak = adapter ? adapter.peak : null;
+  if (!peak || !Array.isArray(peak.windows) || peak.windows.length === 0)
+    return null;
+
+  var now = finiteInt(nowMs);
+  var today = peakLocalDay(now, peak.tzOffsetMin);
+  var current = null;
+  var next = null;
+  // -1 covers windows wrapping from yesterday; +8 covers the Sat/Sun gap of
+  // weekdays-only schedules with room to spare.
+  for (var d = today - 1; d <= today + 8; d++) {
+    var wins = peakWindowsOnDay(peak, d);
+    for (var i = 0; i < wins.length; i++) {
+      var w = wins[i];
+      if (w.startMs <= now && now < w.endMs)
+        current = w;
+    }
+  }
+  if (current === null) {
+    for (var d2 = today - 1; d2 <= today + 8; d2++) {
+      var wins2 = peakWindowsOnDay(peak, d2);
+      for (var j = 0; j < wins2.length; j++) {
+        if (wins2[j].startMs > now && (next === null || wins2[j].startMs < next.startMs))
+          next = wins2[j];
+      }
+    }
+    if (next === null)
+      return null;
+  }
+
+  var reference = current !== null ? current : next;
+  return {
+    inPeak: current !== null,
+    tzOffsetMin: peak.tzOffsetMin,
+    tzLabel: peak.tzLabel,
+    weekdaysOnly: peak.weekdaysOnly === true,
+    peakNote: peak.peakNote || '',
+    offPeakNote: peak.offPeakNote || '',
+    current: current,
+    next: next,
+    transitionAt: current !== null ? current.endMs : next.startMs,
+    scheduleWindows: peakWindowsOnDay(peak, reference.day)
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
@@ -994,6 +1105,14 @@ var PROVIDERS = {
     name: 'z.ai',
     monogram: 'Z',
     color: '#fff59b',
+    peak: {
+      tzOffsetMin: 480,
+      tzLabel: 'UTC+8',
+      weekdaysOnly: true,
+      windows: [{ startMin: 840, endMin: 1080 }], // 14:00–18:00 SGT
+      peakNote: '×3',
+      offPeakNote: '×1'
+    },
     requests: [{
       id: 'main',
       url: 'https://api.z.ai/api/monitor/usage/quota/limit',
@@ -1007,6 +1126,14 @@ var PROVIDERS = {
     name: 'DeepSeek',
     monogram: 'DS',
     color: '#4D6BFE',
+    peak: {
+      tzOffsetMin: 0,
+      tzLabel: 'UTC',
+      weekdaysOnly: true,
+      windows: [{ startMin: 60, endMin: 240 }, { startMin: 360, endMin: 600 }],
+      peakNote: '×1',
+      offPeakNote: '×0.5'
+    },
     requests: [{
       id: 'main',
       url: 'https://api.deepseek.com/user/balance',
